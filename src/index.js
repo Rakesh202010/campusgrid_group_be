@@ -1,0 +1,71 @@
+import express from 'express';
+import cors from 'cors';
+import prismaAdmin from './lib/prisma.js';
+
+// Import routes
+import authRoutes from './routes/auth.js';
+import dataRoutes from './routes/data.js';
+
+// No need for dotenv in Docker, env vars are set in docker-compose
+
+const app = express();
+const PORT = process.env.PORT || 4001;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'CampusGrid Group API is running (B2B & B2C)',
+    timestamp: new Date().toISOString(),
+    version: process.env.APP_VERSION || '1.0.0'
+  });
+});
+
+// API Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/data', dataRoutes);
+
+// 404 Handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Route not found'
+  });
+});
+
+// Error Handler
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({
+    success: false,
+    message: err.message || 'Internal server error',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`
+🚀 CampusGrid Group API Server Running! (B2B & B2C)
+📍 Port: ${PORT}
+🌐 Environment: ${process.env.NODE_ENV || 'development'}
+📊 Health Check: http://localhost:${PORT}/health
+🔗 API Docs: http://localhost:${PORT}/api/groups
+  `);
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  await prismaAdmin.$disconnect();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  await prismaAdmin.$disconnect();
+  process.exit(0);
+});
