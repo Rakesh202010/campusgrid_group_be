@@ -11,6 +11,8 @@ import academicSessionsRoutes from './routes/academicSessions.js';
 import classConfigRoutes from './routes/classConfig.js';
 import subjectsRoutes from './routes/subjects.js';
 import feesRoutes from './routes/fees.js';
+import peopleRoutes from './routes/people.js';
+import teachersRoutes from './routes/teachers.js';
 
 // No need for dotenv in Docker, env vars are set in docker-compose
 
@@ -41,6 +43,8 @@ app.use('/api/academic-sessions', academicSessionsRoutes); // Academic session c
 app.use('/api/class-config', classConfigRoutes); // Class, section, structure configuration
 app.use('/api/subjects', subjectsRoutes); // Subject and curriculum configuration
 app.use('/api/fees', feesRoutes); // Fee and finance configuration
+app.use('/api/people', peopleRoutes); // People and user role management
+app.use('/api/teachers', teachersRoutes); // Teacher management
 
 // 404 Handler
 app.use((req, res) => {
