@@ -1,4 +1,7 @@
-// Prisma schema for Group Backend (connects to admin DB for authentication)
+// Prisma schema for Group Backend
+// This schema connects to ADMIN database for group metadata only
+// All user data (GroupAdmin, School, SchoolAdmin, Student, Teacher, Class)
+// is stored in their respective group databases (campusgrid_group_*)
 
 datasource db {
   provider = "postgresql"
@@ -10,6 +13,10 @@ generator client {
   binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "darwin-arm64"]
 }
 
+// ========================================
+// GROUP METADATA ONLY (in Admin DB)
+// ========================================
+
 model SchoolGroup {
   id                String   @id @default(uuid())
   groupName         String
@@ -19,32 +26,16 @@ model SchoolGroup {
   dbHost            String
   dbUser            String
   dbPassword        String
-  status            String
-  
-  admins            GroupAdmin[]
+  status            String   @default("Active") // Active, Suspended, Inactive
   
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   @@index([subdomain])
   @@index([status])
+  @@map("school_groups")
 }
 
-model GroupAdmin {
-  id                String      @id @default(uuid())
-  email             String      @unique
-  password          String
-  name              String
-  role              String      @default("admin")
-  groupId           String
-  group             SchoolGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  
-  isActive          Boolean     @default(true)
-  lastLogin         DateTime?
-  
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
-
-  @@index([email])
-  @@index([groupId])
-}
+// Note: GroupAdmin, School, SchoolAdmin, Student, Teacher, Class models
+// are now stored in their respective group databases (campusgrid_group_*),
+// NOT in the admin database. Only metadata (SchoolGroup) is stored here.

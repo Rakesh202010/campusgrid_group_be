@@ -5,6 +5,12 @@ import prismaAdmin from './lib/prisma.js';
 // Import routes
 import authRoutes from './routes/auth.js';
 import dataRoutes from './routes/data.js';
+import schoolsRoutes from './routes/schools.js';
+import schoolAuthRoutes from './routes/schoolAuth.js';
+import academicSessionsRoutes from './routes/academicSessions.js';
+import classConfigRoutes from './routes/classConfig.js';
+import subjectsRoutes from './routes/subjects.js';
+import feesRoutes from './routes/fees.js';
 
 // No need for dotenv in Docker, env vars are set in docker-compose
 
@@ -27,8 +33,14 @@ app.get('/health', (req, res) => {
 });
 
 // API Routes
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authRoutes); // Group admin authentication
 app.use('/api/data', dataRoutes);
+app.use('/api/schools', schoolsRoutes); // School onboarding and management
+app.use('/api/school-auth', schoolAuthRoutes); // School admin authentication
+app.use('/api/academic-sessions', academicSessionsRoutes); // Academic session configuration
+app.use('/api/class-config', classConfigRoutes); // Class, section, structure configuration
+app.use('/api/subjects', subjectsRoutes); // Subject and curriculum configuration
+app.use('/api/fees', feesRoutes); // Fee and finance configuration
 
 // 404 Handler
 app.use((req, res) => {
