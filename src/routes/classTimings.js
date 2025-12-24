@@ -16,7 +16,8 @@ import {
   generateDefaultTemplate,
   getDayWiseTimings,
   saveDayWiseTimings,
-  getTimingForDate
+  getTimingForDate,
+  getAllDayTimingsWithPeriods
 } from '../controllers/classTimingController.js';
 import { verifyToken } from '../middleware/auth.js';
 
@@ -31,6 +32,9 @@ router.post('/settings', saveTimingSettings);
 // Day-wise Timing Configuration (Mon-Sat different hours)
 router.get('/day-wise', getDayWiseTimings);
 router.post('/day-wise', saveDayWiseTimings);
+
+// Get all day timings with their periods (for Timetable page)
+router.get('/day-wise/all-periods', getAllDayTimingsWithPeriods);
 
 // Get timing for a specific date (combines exceptions, day-wise, defaults)
 router.get('/date/:date', getTimingForDate);

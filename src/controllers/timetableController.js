@@ -282,6 +282,405 @@ export const deleteTimetableByDayPeriod = async (req, res) => {
   }
 };
 
+// =====================================================
+// DAILY TIMETABLE VIEW (with date-specific substitutions)
+// =====================================================
+
+// Get daily timetable for a specific date (with substitutions applied)
+export const getDailyTimetable = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const { date, teacher_id, class_section_id, academic_session_id } = req.query;
+
+    if (!date || !academic_session_id) {
+      return res.status(400).json({ success: false, message: 'Date and academic session are required.' });
+    }
+
+    // Get day of week from date
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayOfWeek = dayNames[new Date(date).getDay()];
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      // Build query based on filters
+      let baseQuery = `
+        SELECT te.*,
+          s.name as subject_name, s.code as subject_code,
+          t.id as teacher_id, t.first_name as teacher_first_name, t.last_name as teacher_last_name, t.employee_id,
+          cs.id as class_section_id,
+          cg.name as grade_name, cg.display_name as grade_display_name,
+          sec.name as section_name,
+          cp.name as period_name, cp.start_time, cp.end_time,
+          -- Check for date-specific substitution
+          ds.id as substitution_id,
+          ds.substitute_teacher_id,
+          ds.reason as substitution_reason,
+          st.first_name as substitute_first_name, st.last_name as substitute_last_name, st.employee_id as substitute_employee_id
+        FROM timetable_entries te
+        LEFT JOIN subjects s ON te.subject_id = s.id
+        LEFT JOIN teachers t ON te.teacher_id = t.id
+        LEFT JOIN class_sections cs ON te.class_section_id = cs.id
+        LEFT JOIN class_grades cg ON cs.class_grade_id = cg.id
+        LEFT JOIN sections sec ON cs.section_id = sec.id
+        LEFT JOIN class_periods cp ON te.period_id = cp.id
+        LEFT JOIN timetable_date_substitutions ds ON ds.school_id = te.school_id 
+          AND ds.substitution_date = $1 
+          AND ds.day_of_week = te.day_of_week 
+          AND ds.period_number = te.period_number
+          AND ds.class_section_id = te.class_section_id
+        LEFT JOIN teachers st ON ds.substitute_teacher_id = st.id
+        WHERE te.school_id = $2 AND te.day_of_week = $3 AND te.academic_session_id = $4 AND te.is_active = true
+      `;
+      const params = [date, schoolId, dayOfWeek, academic_session_id];
+      let paramIndex = 5;
+
+      if (teacher_id) {
+        // Show entries where this teacher is assigned OR is substituting
+        baseQuery += ` AND (te.teacher_id = $${paramIndex} OR ds.substitute_teacher_id = $${paramIndex})`;
+        params.push(teacher_id);
+        paramIndex++;
+      }
+
+      if (class_section_id) {
+        baseQuery += ` AND te.class_section_id = $${paramIndex}`;
+        params.push(class_section_id);
+        paramIndex++;
+      }
+
+      baseQuery += ` ORDER BY te.period_number`;
+
+      const result = await dbClient.query(baseQuery, params);
+
+      // Format response
+      const entries = result.rows.map(row => ({
+        id: row.id,
+        dayOfWeek: row.day_of_week,
+        periodNumber: row.period_number,
+        periodId: row.period_id,
+        periodName: row.period_name,
+        startTime: row.start_time,
+        endTime: row.end_time,
+        // Original teacher
+        originalTeacherId: row.teacher_id,
+        originalTeacherName: `${row.teacher_first_name || ''} ${row.teacher_last_name || ''}`.trim(),
+        originalTeacherEmployeeId: row.employee_id,
+        // Effective teacher (substitute if exists, else original)
+        effectiveTeacherId: row.substitute_teacher_id || row.teacher_id,
+        effectiveTeacherName: row.substitute_teacher_id 
+          ? `${row.substitute_first_name || ''} ${row.substitute_last_name || ''}`.trim()
+          : `${row.teacher_first_name || ''} ${row.teacher_last_name || ''}`.trim(),
+        isSubstituted: !!row.substitution_id,
+        substitutionId: row.substitution_id,
+        substitutionReason: row.substitution_reason,
+        substituteTeacherId: row.substitute_teacher_id,
+        substituteTeacherName: row.substitute_teacher_id 
+          ? `${row.substitute_first_name || ''} ${row.substitute_last_name || ''}`.trim()
+          : null,
+        // Class and subject
+        classSectionId: row.class_section_id,
+        className: row.grade_display_name || row.grade_name,
+        sectionName: row.section_name,
+        fullClassName: `${row.grade_display_name || row.grade_name} ${row.section_name}`,
+        subjectId: row.subject_id,
+        subjectName: row.subject_name,
+        subjectCode: row.subject_code,
+        room: row.room
+      }));
+
+      res.json({ 
+        success: true, 
+        data: {
+          date,
+          dayOfWeek,
+          entries
+        }
+      });
+    } finally {
+      await dbClient.end();
+    }
+  } catch (error) {
+    console.error('Error getting daily timetable:', error);
+    res.status(500).json({ success: false, message: 'Failed to retrieve daily timetable.' });
+  }
+};
+
+// Get available teachers for substitution
+export const getAvailableTeachersForSubstitution = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const { date, period_number, exclude_teacher_id, academic_session_id } = req.query;
+
+    if (!date || !period_number || !academic_session_id) {
+      return res.status(400).json({ success: false, message: 'Date, period, and academic session are required.' });
+    }
+
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayOfWeek = dayNames[new Date(date).getDay()];
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      // Find teachers who are NOT busy during this period on this day
+      const query = `
+        WITH busy_teachers AS (
+          -- Teachers with regular timetable entries at this period
+          SELECT DISTINCT teacher_id FROM timetable_entries
+          WHERE school_id = $1 AND day_of_week = $2 AND period_number = $3 
+            AND academic_session_id = $4 AND is_active = true
+          UNION
+          -- Teachers already substituting on this date/period
+          SELECT DISTINCT substitute_teacher_id FROM timetable_date_substitutions
+          WHERE school_id = $1 AND substitution_date = $5 AND period_number = $3
+        )
+        SELECT t.id, t.first_name, t.last_name, t.employee_id, t.department,
+          (SELECT COUNT(*) FROM timetable_entries te 
+           WHERE te.teacher_id = t.id AND te.day_of_week = $2 AND te.is_active = true) as periods_on_day,
+          (SELECT COUNT(*) FROM timetable_date_substitutions ds 
+           WHERE ds.substitute_teacher_id = t.id AND ds.substitution_date = $5) as substitutions_today
+        FROM teachers t
+        WHERE t.school_id = $1 
+          AND t.status = 'active'
+          AND t.id NOT IN (SELECT teacher_id FROM busy_teachers WHERE teacher_id IS NOT NULL)
+          ${exclude_teacher_id ? 'AND t.id != $6' : ''}
+        ORDER BY periods_on_day ASC, substitutions_today ASC, t.first_name
+      `;
+
+      const params = [schoolId, dayOfWeek, period_number, academic_session_id, date];
+      if (exclude_teacher_id) params.push(exclude_teacher_id);
+
+      const result = await dbClient.query(query, params);
+
+      res.json({
+        success: true,
+        data: result.rows.map(t => ({
+          id: t.id,
+          name: `${t.first_name} ${t.last_name}`,
+          employeeId: t.employee_id,
+          department: t.department,
+          periodsOnDay: parseInt(t.periods_on_day) || 0,
+          substitutionsToday: parseInt(t.substitutions_today) || 0,
+          totalLoadToday: (parseInt(t.periods_on_day) || 0) + (parseInt(t.substitutions_today) || 0)
+        }))
+      });
+    } finally {
+      await dbClient.end();
+    }
+  } catch (error) {
+    console.error('Error getting available teachers:', error);
+    res.status(500).json({ success: false, message: 'Failed to find available teachers.' });
+  }
+};
+
+// Create a date-specific substitution with comprehensive validation
+export const createSubstitution = async (req, res) => {
+  try {
+    const { groupId, schoolId, userId } = req.user;
+    const { 
+      academicSessionId, date, dayOfWeek, periodNumber, 
+      originalTeacherId, substituteTeacherId, classSectionId, subjectId, reason 
+    } = req.body;
+
+    if (!date || !substituteTeacherId || periodNumber === undefined) {
+      return res.status(400).json({ success: false, message: 'Date, substitute teacher, and period are required.' });
+    }
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      // =====================================================
+      // VALIDATION 1: Check if substitute teacher exists and is active
+      // =====================================================
+      const teacherCheck = await dbClient.query(
+        `SELECT id, first_name, last_name, status FROM teachers WHERE id = $1 AND school_id = $2`,
+        [substituteTeacherId, schoolId]
+      );
+
+      if (teacherCheck.rows.length === 0) {
+        return res.status(400).json({ success: false, message: 'Substitute teacher not found.' });
+      }
+
+      const substituteTeacher = teacherCheck.rows[0];
+      if (substituteTeacher.status !== 'active') {
+        return res.status(400).json({ 
+          success: false, 
+          message: `${substituteTeacher.first_name} ${substituteTeacher.last_name} is not active (Status: ${substituteTeacher.status}).` 
+        });
+      }
+
+      // =====================================================
+      // VALIDATION 2: Check if teacher has a regular class at this time
+      // =====================================================
+      const regularClassCheck = await dbClient.query(
+        `SELECT te.id, cg.display_name as grade_name, sec.name as section_name, s.name as subject_name
+         FROM timetable_entries te
+         LEFT JOIN class_sections cs ON te.class_section_id = cs.id
+         LEFT JOIN class_grades cg ON cs.class_grade_id = cg.id
+         LEFT JOIN sections sec ON cs.section_id = sec.id
+         LEFT JOIN subjects s ON te.subject_id = s.id
+         WHERE te.school_id = $1 
+           AND te.teacher_id = $2 
+           AND te.day_of_week = $3 
+           AND te.period_number = $4
+           AND te.is_active = true`,
+        [schoolId, substituteTeacherId, dayOfWeek, periodNumber]
+      );
+
+      if (regularClassCheck.rows.length > 0) {
+        const conflictClass = regularClassCheck.rows[0];
+        return res.status(400).json({ 
+          success: false, 
+          message: `${substituteTeacher.first_name} ${substituteTeacher.last_name} is already assigned to ${conflictClass.grade_name} ${conflictClass.section_name} (${conflictClass.subject_name || 'No subject'}) during Period ${periodNumber}.` 
+        });
+      }
+
+      // =====================================================
+      // VALIDATION 3: Check if teacher is already substituting elsewhere
+      // =====================================================
+      const existingSubCheck = await dbClient.query(
+        `SELECT ds.id, cg.display_name as grade_name, sec.name as section_name
+         FROM timetable_date_substitutions ds
+         LEFT JOIN class_sections cs ON ds.class_section_id = cs.id
+         LEFT JOIN class_grades cg ON cs.class_grade_id = cg.id
+         LEFT JOIN sections sec ON cs.section_id = sec.id
+         WHERE ds.school_id = $1 
+           AND ds.substitute_teacher_id = $2 
+           AND ds.substitution_date = $3 
+           AND ds.period_number = $4`,
+        [schoolId, substituteTeacherId, date, periodNumber]
+      );
+
+      if (existingSubCheck.rows.length > 0) {
+        const existingSub = existingSubCheck.rows[0];
+        return res.status(400).json({ 
+          success: false, 
+          message: `${substituteTeacher.first_name} ${substituteTeacher.last_name} is already substituting for ${existingSub.grade_name} ${existingSub.section_name} during Period ${periodNumber} on this date.` 
+        });
+      }
+
+      // =====================================================
+      // VALIDATION 5: Cannot substitute for yourself
+      // =====================================================
+      if (originalTeacherId && originalTeacherId === substituteTeacherId) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'A teacher cannot substitute for themselves.' 
+        });
+      }
+
+      // =====================================================
+      // ALL VALIDATIONS PASSED - Create the substitution
+      // =====================================================
+      const result = await dbClient.query(
+        `INSERT INTO timetable_date_substitutions (
+          school_id, academic_session_id, substitution_date, day_of_week, period_number,
+          original_teacher_id, substitute_teacher_id, class_section_id, subject_id, reason, created_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (school_id, substitution_date, day_of_week, period_number, class_section_id) 
+        DO UPDATE SET
+          substitute_teacher_id = EXCLUDED.substitute_teacher_id,
+          reason = EXCLUDED.reason
+        RETURNING *`,
+        [schoolId, academicSessionId, date, dayOfWeek, periodNumber, 
+         originalTeacherId || null, substituteTeacherId, classSectionId || null, subjectId || null, reason || null, userId]
+      );
+
+      res.status(201).json({ 
+        success: true, 
+        message: `${substituteTeacher.first_name} ${substituteTeacher.last_name} assigned as substitute for Period ${periodNumber}.`, 
+        data: result.rows[0] 
+      });
+    } finally {
+      await dbClient.end();
+    }
+  } catch (error) {
+    console.error('Error creating substitution:', error);
+    res.status(500).json({ success: false, message: 'Failed to assign substitute.' });
+  }
+};
+
+// Remove a date-specific substitution
+export const removeSubstitution = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const { id } = req.params;
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      const result = await dbClient.query(
+        `DELETE FROM timetable_date_substitutions WHERE id = $1 AND school_id = $2 RETURNING id`,
+        [id, schoolId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Substitution not found.' });
+      }
+
+      res.json({ success: true, message: 'Substitution removed. Original teacher restored.' });
+    } finally {
+      await dbClient.end();
+    }
+  } catch (error) {
+    console.error('Error removing substitution:', error);
+    res.status(500).json({ success: false, message: 'Failed to remove substitution.' });
+  }
+};
+
+// Get all substitutions for a date
+export const getSubstitutionsForDate = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const { date } = req.query;
+
+    if (!date) {
+      return res.status(400).json({ success: false, message: 'Date is required.' });
+    }
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      const result = await dbClient.query(
+        `SELECT ds.*,
+          ot.first_name as original_first_name, ot.last_name as original_last_name,
+          st.first_name as substitute_first_name, st.last_name as substitute_last_name,
+          s.name as subject_name,
+          cg.display_name as grade_name, sec.name as section_name
+        FROM timetable_date_substitutions ds
+        LEFT JOIN teachers ot ON ds.original_teacher_id = ot.id
+        LEFT JOIN teachers st ON ds.substitute_teacher_id = st.id
+        LEFT JOIN subjects s ON ds.subject_id = s.id
+        LEFT JOIN class_sections cs ON ds.class_section_id = cs.id
+        LEFT JOIN class_grades cg ON cs.class_grade_id = cg.id
+        LEFT JOIN sections sec ON cs.section_id = sec.id
+        WHERE ds.school_id = $1 AND ds.substitution_date = $2
+        ORDER BY ds.period_number`,
+        [schoolId, date]
+      );
+
+      res.json({
+        success: true,
+        data: result.rows.map(row => ({
+          id: row.id,
+          date: row.substitution_date,
+          dayOfWeek: row.day_of_week,
+          periodNumber: row.period_number,
+          originalTeacher: row.original_first_name ? `${row.original_first_name} ${row.original_last_name}` : 'N/A',
+          substituteTeacher: `${row.substitute_first_name} ${row.substitute_last_name}`,
+          className: row.grade_name ? `${row.grade_name} ${row.section_name}` : 'N/A',
+          subjectName: row.subject_name || 'N/A',
+          reason: row.reason
+        }))
+      });
+    } finally {
+      await dbClient.end();
+    }
+  } catch (error) {
+    console.error('Error getting substitutions:', error);
+    res.status(500).json({ success: false, message: 'Failed to retrieve substitutions.' });
+  }
+};
+
 // Bulk save timetable (for copy/paste operations)
 export const bulkSaveTimetable = async (req, res) => {
   try {

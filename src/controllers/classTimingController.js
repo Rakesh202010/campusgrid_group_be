@@ -862,6 +862,133 @@ export const saveDayWiseTimings = async (req, res) => {
   }
 };
 
+// Get all day-wise timings with their template periods (for Timetable page)
+export const getAllDayTimingsWithPeriods = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      // Get day-wise configurations
+      const dayWiseResult = await dbClient.query(
+        `SELECT dt.*, t.name as template_name, t.code as template_code
+         FROM school_day_timings dt
+         LEFT JOIN class_timing_templates t ON dt.template_id = t.id
+         WHERE dt.school_id = $1
+         ORDER BY dt.day_of_week`,
+        [schoolId]
+      );
+
+      // Get default template
+      const defaultTemplateResult = await dbClient.query(
+        `SELECT id FROM class_timing_templates WHERE school_id = $1 AND is_default = TRUE AND is_active = TRUE`,
+        [schoolId]
+      );
+      const defaultTemplateId = defaultTemplateResult.rows[0]?.id;
+
+      // Get all templates with their periods and breaks
+      const templatesResult = await dbClient.query(
+        `SELECT id, name, code FROM class_timing_templates WHERE school_id = $1 AND is_active = TRUE`,
+        [schoolId]
+      );
+
+      // Build template data map with periods and breaks
+      const templateData = {};
+      for (const template of templatesResult.rows) {
+        const periodsRes = await dbClient.query(
+          `SELECT * FROM class_periods WHERE template_id = $1 AND is_active = TRUE ORDER BY order_index`,
+          [template.id]
+        );
+        const breaksRes = await dbClient.query(
+          `SELECT * FROM break_periods WHERE template_id = $1 AND is_active = TRUE ORDER BY order_index`,
+          [template.id]
+        );
+
+        templateData[template.id] = {
+          id: template.id,
+          name: template.name,
+          code: template.code,
+          periods: periodsRes.rows.map(p => ({
+            id: p.id,
+            periodNumber: p.period_number,
+            name: p.name,
+            shortName: p.short_name,
+            startTime: p.start_time,
+            endTime: p.end_time,
+            periodType: p.period_type
+          })),
+          breaks: breaksRes.rows.map(b => ({
+            id: b.id,
+            name: b.name,
+            shortName: b.short_name,
+            startTime: b.start_time,
+            endTime: b.end_time,
+            breakType: b.break_type,
+            afterPeriod: b.after_period
+          }))
+        };
+      }
+
+      // Build day data
+      const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const existingDayConfig = {};
+      dayWiseResult.rows.forEach(row => {
+        existingDayConfig[row.day_of_week] = row;
+      });
+
+      // Get default settings
+      const settingsResult = await dbClient.query(
+        `SELECT * FROM school_timing_settings WHERE school_id = $1`,
+        [schoolId]
+      );
+      const settings = settingsResult.rows[0];
+      const workingDays = settings?.working_days || [1, 2, 3, 4, 5, 6];
+
+      const dayTimings = [];
+      for (let i = 0; i < 7; i++) {
+        const dayConfig = existingDayConfig[i];
+        const isWorkingDay = dayConfig ? dayConfig.is_working_day : workingDays.includes(i);
+        
+        // Determine which template to use for this day
+        let templateId = dayConfig?.template_id || defaultTemplateId;
+        let template = templateData[templateId] || templateData[defaultTemplateId];
+
+        dayTimings.push({
+          dayOfWeek: i,
+          dayName: daysOfWeek[i],
+          isWorkingDay,
+          isHalfDay: dayConfig?.is_half_day || false,
+          schoolStartTime: dayConfig?.school_start_time || settings?.school_start_time || '08:00',
+          schoolEndTime: dayConfig?.school_end_time || settings?.school_end_time || '15:00',
+          templateId: templateId,
+          templateName: template?.name || 'Default',
+          periods: template?.periods || [],
+          breaks: template?.breaks || []
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          isConfigured: !!defaultTemplateId,
+          defaultTemplateId,
+          settings: settings ? {
+            schoolStartTime: settings.school_start_time,
+            schoolEndTime: settings.school_end_time,
+            workingDays: settings.working_days
+          } : null,
+          dayTimings
+        }
+      });
+    } finally {
+      await dbClient.end();
+    }
+  } catch (error) {
+    console.error('Error getting all day timings:', error);
+    res.status(500).json({ success: false, message: 'Failed to retrieve day timings.' });
+  }
+};
+
 // Get timing for a specific date (considers day-wise, exceptions, templates)
 export const getTimingForDate = async (req, res) => {
   try {
