@@ -17,7 +17,7 @@ export const getSubjects = async (req, res) => {
     try {
       let query = `
         SELECT 
-          id, name, code, display_name, description, category, subject_type,
+          id, name, code, display_name, description, category, department_id, subject_type,
           is_mandatory, credit_hours, max_marks, passing_marks, order_index,
           color, icon, is_active, school_id, created_at, updated_at
         FROM subjects
@@ -57,6 +57,7 @@ export const getSubjects = async (req, res) => {
           displayName: row.display_name || row.name,
           description: row.description,
           category: row.category,
+          departmentId: row.department_id,
           subjectType: row.subject_type,
           isMandatory: row.is_mandatory,
           creditHours: row.credit_hours,
@@ -92,7 +93,7 @@ export const createSubject = async (req, res) => {
   try {
     const { groupId, schoolId } = req.user;
     const { 
-      name, code, displayName, description, category, subjectType,
+      name, code, displayName, description, category, departmentId, subjectType,
       isMandatory, creditHours, maxMarks, passingMarks, orderIndex,
       color, icon, isActive 
     } = req.body;
@@ -122,15 +123,15 @@ export const createSubject = async (req, res) => {
 
       const result = await dbClient.query(
         `INSERT INTO subjects (
-          name, code, display_name, description, category, subject_type,
+          name, code, display_name, description, category, department_id, subject_type,
           is_mandatory, credit_hours, max_marks, passing_marks, order_index,
           color, icon, is_active, school_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING *`,
         [
           name, code, displayName || name, description, category || 'core',
-          subjectType || 'theory', isMandatory !== false, creditHours || 0,
-          maxMarks || 100, passingMarks || 33, orderIndex || 0,
+          departmentId || null, subjectType || 'theory', isMandatory !== false, 
+          creditHours || 0, maxMarks || 100, passingMarks || 33, orderIndex || 0,
           color || '#3B82F6', icon, isActive !== false, schoolId
         ]
       );
@@ -147,6 +148,7 @@ export const createSubject = async (req, res) => {
           displayName: row.display_name,
           description: row.description,
           category: row.category,
+          departmentId: row.department_id,
           subjectType: row.subject_type,
           isMandatory: row.is_mandatory,
           creditHours: row.credit_hours,
@@ -182,7 +184,7 @@ export const updateSubject = async (req, res) => {
     const { groupId, schoolId } = req.user;
     const { id } = req.params;
     const { 
-      name, code, displayName, description, category, subjectType,
+      name, code, displayName, description, category, departmentId, subjectType,
       isMandatory, creditHours, maxMarks, passingMarks, orderIndex,
       color, icon, isActive 
     } = req.body;
@@ -212,21 +214,22 @@ export const updateSubject = async (req, res) => {
           display_name = COALESCE($3, display_name),
           description = COALESCE($4, description),
           category = COALESCE($5, category),
-          subject_type = COALESCE($6, subject_type),
-          is_mandatory = COALESCE($7, is_mandatory),
-          credit_hours = COALESCE($8, credit_hours),
-          max_marks = COALESCE($9, max_marks),
-          passing_marks = COALESCE($10, passing_marks),
-          order_index = COALESCE($11, order_index),
-          color = COALESCE($12, color),
-          icon = COALESCE($13, icon),
-          is_active = COALESCE($14, is_active),
+          department_id = $6,
+          subject_type = COALESCE($7, subject_type),
+          is_mandatory = COALESCE($8, is_mandatory),
+          credit_hours = COALESCE($9, credit_hours),
+          max_marks = COALESCE($10, max_marks),
+          passing_marks = COALESCE($11, passing_marks),
+          order_index = COALESCE($12, order_index),
+          color = COALESCE($13, color),
+          icon = COALESCE($14, icon),
+          is_active = COALESCE($15, is_active),
           updated_at = NOW()
-        WHERE id = $15 AND school_id = $16
+        WHERE id = $16 AND school_id = $17
         RETURNING *`,
         [
-          name, code, displayName, description, category, subjectType,
-          isMandatory, creditHours, maxMarks, passingMarks, orderIndex,
+          name, code, displayName, description, category, departmentId || null,
+          subjectType, isMandatory, creditHours, maxMarks, passingMarks, orderIndex,
           color, icon, isActive, id, schoolId
         ]
       );
@@ -250,6 +253,7 @@ export const updateSubject = async (req, res) => {
           displayName: row.display_name,
           description: row.description,
           category: row.category,
+          departmentId: row.department_id,
           subjectType: row.subject_type,
           isMandatory: row.is_mandatory,
           creditHours: row.credit_hours,

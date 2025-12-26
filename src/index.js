@@ -17,6 +17,9 @@ import subjectAssignmentRoutes from './routes/subjectAssignment.js';
 import classTimingsRoutes from './routes/classTimings.js';
 import departmentsRoutes from './routes/departments.js';
 import timetableRoutes from './routes/timetable.js';
+import studentsRoutes from './routes/students.js';
+import numberSettingsRoutes from './routes/numberSettings.js';
+import dashboardRoutes from './routes/dashboard.js';
 
 // No need for dotenv in Docker, env vars are set in docker-compose
 
@@ -53,6 +56,9 @@ app.use('/api/subject-assignments', subjectAssignmentRoutes); // Subject assignm
 app.use('/api/class-timings', classTimingsRoutes); // Class timing configuration
 app.use('/api/departments', departmentsRoutes); // Department configuration
 app.use('/api/timetable', timetableRoutes); // Timetable management
+app.use('/api/students', studentsRoutes); // Student management
+app.use('/api/number-settings', numberSettingsRoutes); // Admission & Roll number settings
+app.use('/api/dashboard', dashboardRoutes); // Dashboard statistics
 
 // 404 Handler
 app.use((req, res) => {
