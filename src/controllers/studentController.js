@@ -351,7 +351,10 @@ export const createStudent = async (req, res) => {
       pickupPoint,
       previousSchool,
       photoUrl,
-      parents
+      parents,
+      // Fee Settings
+      paymentFrequency,
+      customFeeStructureId
     } = req.body;
 
     if (!firstName || !lastName) {
@@ -399,10 +402,10 @@ export const createStudent = async (req, res) => {
           aadhar_number, medical_conditions, allergies,
           uses_transport, pickup_point,
           previous_school_name, previous_school_address, previous_class, transfer_certificate_number,
-          photo_url, status, created_by
+          photo_url, payment_frequency, custom_fee_structure_id, status, created_by
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, 'active', $37
+          $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, 'active', $39
         ) RETURNING *
       `, [
         schoolId,
@@ -441,6 +444,8 @@ export const createStudent = async (req, res) => {
         previousSchool?.class || null,
         previousSchool?.tcNumber || null,
         photoUrl || null,
+        paymentFrequency || null,
+        customFeeStructureId || null,
         userId
       ]);
 
@@ -574,7 +579,10 @@ export const updateStudent = async (req, res) => {
         usesTransport: 'uses_transport',
         pickupPoint: 'pickup_point',
         photoUrl: 'photo_url',
-        status: 'status'
+        status: 'status',
+        // Fee Settings
+        paymentFrequency: 'payment_frequency',
+        customFeeStructureId: 'custom_fee_structure_id'
       };
 
       for (const [key, column] of Object.entries(fieldMapping)) {

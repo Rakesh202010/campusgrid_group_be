@@ -20,6 +20,8 @@ import timetableRoutes from './routes/timetable.js';
 import studentsRoutes from './routes/students.js';
 import numberSettingsRoutes from './routes/numberSettings.js';
 import dashboardRoutes from './routes/dashboard.js';
+import feeManagementRoutes from './routes/feeManagement.js';
+import feeSettingsRoutes from './routes/feeSettings.js';
 
 // No need for dotenv in Docker, env vars are set in docker-compose
 
@@ -59,6 +61,8 @@ app.use('/api/timetable', timetableRoutes); // Timetable management
 app.use('/api/students', studentsRoutes); // Student management
 app.use('/api/number-settings', numberSettingsRoutes); // Admission & Roll number settings
 app.use('/api/dashboard', dashboardRoutes); // Dashboard statistics
+app.use('/api/fee-management', feeManagementRoutes); // Fee collection & management
+app.use('/api/fee-settings', feeSettingsRoutes); // Fee settings & configuration
 
 // 404 Handler
 app.use((req, res) => {

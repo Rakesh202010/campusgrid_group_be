@@ -42,6 +42,11 @@ export const getFeeTypes = async (req, res) => {
           description: row.description,
           category: row.category,
           frequency: row.frequency,
+          applicabilityType: row.applicability_type || 'full_year',
+          applicableMonths: row.applicable_months || [],
+          applicableTerms: row.applicable_terms || [],
+          isProratedOnJoin: row.is_prorated_on_join || false,
+          prorationtype: row.proration_type || 'month',
           isMandatory: row.is_mandatory,
           isRefundable: row.is_refundable,
           taxApplicable: row.tax_applicable,
@@ -71,6 +76,7 @@ export const createFeeType = async (req, res) => {
     const { 
       name, code, description, category, frequency, isMandatory, isRefundable,
       taxApplicable, taxPercentage, lateFeeApplicable, lateFeeType, lateFeeValue,
+      applicabilityType, applicableMonths, applicableTerms, isProratedOnJoin, prorationtype,
       orderIndex, isActive 
     } = req.body;
 
@@ -94,14 +100,18 @@ export const createFeeType = async (req, res) => {
         `INSERT INTO fee_types (
           name, code, description, category, frequency, is_mandatory, is_refundable,
           tax_applicable, tax_percentage, late_fee_applicable, late_fee_type, late_fee_value,
+          applicability_type, applicable_months, applicable_terms, is_prorated_on_join, proration_type,
           order_index, is_active, school_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         RETURNING *`,
         [
           name, code, description, category || 'academic', frequency || 'monthly',
           isMandatory !== false, isRefundable || false, taxApplicable || false,
           taxPercentage || 0, lateFeeApplicable || false, lateFeeType || 'fixed',
-          lateFeeValue || 0, orderIndex || 0, isActive !== false, schoolId
+          lateFeeValue || 0, applicabilityType || 'full_year',
+          JSON.stringify(applicableMonths || []), JSON.stringify(applicableTerms || []),
+          isProratedOnJoin || false, prorationtype || 'month',
+          orderIndex || 0, isActive !== false, schoolId
         ]
       );
 
@@ -115,6 +125,7 @@ export const createFeeType = async (req, res) => {
           code: row.code,
           category: row.category,
           frequency: row.frequency,
+          applicabilityType: row.applicability_type,
           isActive: row.is_active
         }
       });
@@ -152,17 +163,25 @@ export const updateFeeType = async (req, res) => {
           late_fee_applicable = COALESCE($10, late_fee_applicable),
           late_fee_type = COALESCE($11, late_fee_type),
           late_fee_value = COALESCE($12, late_fee_value),
-          order_index = COALESCE($13, order_index),
-          is_active = COALESCE($14, is_active),
+          applicability_type = COALESCE($13, applicability_type),
+          applicable_months = COALESCE($14, applicable_months),
+          applicable_terms = COALESCE($15, applicable_terms),
+          is_prorated_on_join = COALESCE($16, is_prorated_on_join),
+          proration_type = COALESCE($17, proration_type),
+          order_index = COALESCE($18, order_index),
+          is_active = COALESCE($19, is_active),
           updated_at = NOW()
-        WHERE id = $15 AND school_id = $16
+        WHERE id = $20 AND school_id = $21
         RETURNING *`,
         [
           updates.name, updates.code, updates.description, updates.category,
           updates.frequency, updates.isMandatory, updates.isRefundable,
           updates.taxApplicable, updates.taxPercentage, updates.lateFeeApplicable,
-          updates.lateFeeType, updates.lateFeeValue, updates.orderIndex,
-          updates.isActive, id, schoolId
+          updates.lateFeeType, updates.lateFeeValue, updates.applicabilityType,
+          updates.applicableMonths ? JSON.stringify(updates.applicableMonths) : null,
+          updates.applicableTerms ? JSON.stringify(updates.applicableTerms) : null,
+          updates.isProratedOnJoin, updates.prorationtype,
+          updates.orderIndex, updates.isActive, id, schoolId
         ]
       );
 

@@ -19,6 +19,12 @@ import {
   deleteDiscountType,
   bulkCreateDiscountTypes
 } from '../controllers/feeController.js';
+import {
+  generateStudentDues,
+  generateClassDues,
+  getStudentDues,
+  calculateLateFees
+} from '../controllers/studentDuesController.js';
 import { verifyToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -52,6 +58,14 @@ router.post('/discounts', createDiscountType);
 router.post('/discounts/bulk', bulkCreateDiscountTypes);
 router.put('/discounts/:id', updateDiscountType);
 router.delete('/discounts/:id', deleteDiscountType);
+
+// =====================================================
+// Student Dues Routes
+// =====================================================
+router.get('/dues/student/:studentId', getStudentDues);
+router.post('/dues/generate/student', generateStudentDues);
+router.post('/dues/generate/class', generateClassDues);
+router.post('/dues/calculate-late-fees', calculateLateFees);
 
 export default router;
 
