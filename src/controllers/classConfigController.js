@@ -30,9 +30,23 @@ export const getClassGrades = async (req, res) => {
       let paramIndex = 2;
 
       if (academic_session_id) {
-        query += ` AND cg.academic_session_id = $${paramIndex}`;
-        params.push(academic_session_id);
-        paramIndex++;
+        // First check if there are session-specific grades
+        const sessionGradesCheck = await dbClient.query(
+          `SELECT COUNT(*) as count FROM class_grades WHERE school_id = $1 AND academic_session_id = $2`,
+          [schoolId, academic_session_id]
+        );
+        
+        const hasSessionGrades = parseInt(sessionGradesCheck.rows[0].count) > 0;
+        
+        if (hasSessionGrades) {
+          // Use session-specific grades
+          query += ` AND cg.academic_session_id = $${paramIndex}`;
+          params.push(academic_session_id);
+          paramIndex++;
+        } else {
+          // Fall back to master grades (without session)
+          query += ` AND cg.academic_session_id IS NULL`;
+        }
       }
 
       if (is_active !== undefined) {

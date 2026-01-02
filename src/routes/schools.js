@@ -4,7 +4,9 @@ import {
   getAllSchools,
   getSchoolById,
   updateSchool,
-  deleteSchool
+  deleteSchool,
+  syncSchoolClassConfig,
+  syncAllSchoolsClassConfig
 } from '../controllers/schoolsController.js';
 
 const router = express.Router();
@@ -22,6 +24,20 @@ router.post('/', onboardSchool);
  * @access  Private (Group Admin)
  */
 router.get('/', getAllSchools);
+
+/**
+ * @route   POST /api/schools/sync-all-class-config
+ * @desc    Sync class grades and sections for ALL schools in a group
+ * @access  Private (Group Admin)
+ */
+router.post('/sync-all-class-config', syncAllSchoolsClassConfig);
+
+/**
+ * @route   POST /api/schools/:id/sync-class-config
+ * @desc    Sync class grades and sections for a specific school
+ * @access  Private (Group Admin)
+ */
+router.post('/:id/sync-class-config', syncSchoolClassConfig);
 
 /**
  * @route   GET /api/schools/:id

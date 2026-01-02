@@ -177,6 +177,53 @@ export const onboardSchool = async (req, res) => {
 
         const schoolAdmin = adminResult.rows[0];
 
+        // =====================================================
+        // AUTO-CREATE CLASS GRADES from gradesOffered
+        // =====================================================
+        if (gradesOffered && gradesOffered.length > 0) {
+          console.log(`Creating ${gradesOffered.length} class grades for school ${school.id}`);
+          
+          // Map grade names to numeric values
+          const gradeNumericMap = {
+            'Nursery': 0, 'LKG': 1, 'UKG': 2,
+            'Class 1': 1, 'Class 2': 2, 'Class 3': 3, 'Class 4': 4, 'Class 5': 5,
+            'Class 6': 6, 'Class 7': 7, 'Class 8': 8, 'Class 9': 9, 'Class 10': 10,
+            'Class 11': 11, 'Class 12': 12
+          };
+
+          for (let i = 0; i < gradesOffered.length; i++) {
+            const gradeName = gradesOffered[i];
+            const numericValue = gradeNumericMap[gradeName] || (i + 1);
+            
+            await dbClient.query(
+              `INSERT INTO class_grades (
+                name, display_name, numeric_value, order_index, is_active, school_id, created_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+              ON CONFLICT (school_id, name, academic_session_id) DO NOTHING`,
+              [gradeName, gradeName, numericValue, i, true, school.id]
+            );
+          }
+        }
+
+        // =====================================================
+        // AUTO-CREATE SECTIONS from sectionsPerGrade
+        // =====================================================
+        if (sectionsPerGrade && sectionsPerGrade.length > 0) {
+          console.log(`Creating ${sectionsPerGrade.length} sections for school ${school.id}`);
+          
+          for (let i = 0; i < sectionsPerGrade.length; i++) {
+            const sectionName = sectionsPerGrade[i];
+            
+            await dbClient.query(
+              `INSERT INTO sections (
+                name, display_name, order_index, is_active, school_id, created_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+              ON CONFLICT (school_id, name) DO NOTHING`,
+              [sectionName, `Section ${sectionName}`, i, true, school.id]
+            );
+          }
+        }
+
         // Commit transaction
         await dbClient.query('COMMIT');
 
@@ -620,6 +667,225 @@ export const deleteSchool = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to delete school',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Sync class grades and sections for an existing school
+ * Creates class_grades and sections from grades_offered and sections_per_grade
+ */
+export const syncSchoolClassConfig = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const groupId = req.query.groupId || req.user?.groupId;
+
+    if (!groupId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Group ID is required'
+      });
+    }
+
+    // Get group DB connection
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      // Get school details
+      const schoolResult = await dbClient.query(
+        `SELECT id, school_name, grades_offered, sections_per_grade FROM schools WHERE id = $1`,
+        [id]
+      );
+
+      if (schoolResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'School not found'
+        });
+      }
+
+      const school = schoolResult.rows[0];
+      const gradesOffered = school.grades_offered || [];
+      const sectionsPerGrade = school.sections_per_grade || [];
+
+      let gradesCreated = 0;
+      let sectionsCreated = 0;
+
+      // Map grade names to numeric values
+      const gradeNumericMap = {
+        'Nursery': 0, 'LKG': 1, 'UKG': 2,
+        'Class 1': 1, 'Class 2': 2, 'Class 3': 3, 'Class 4': 4, 'Class 5': 5,
+        'Class 6': 6, 'Class 7': 7, 'Class 8': 8, 'Class 9': 9, 'Class 10': 10,
+        'Class 11': 11, 'Class 12': 12
+      };
+
+      // Create class grades
+      for (let i = 0; i < gradesOffered.length; i++) {
+        const gradeName = gradesOffered[i];
+        const numericValue = gradeNumericMap[gradeName] || (i + 1);
+        
+        const result = await dbClient.query(
+          `INSERT INTO class_grades (
+            name, display_name, numeric_value, order_index, is_active, school_id, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+          ON CONFLICT (school_id, name, academic_session_id) DO NOTHING
+          RETURNING id`,
+          [gradeName, gradeName, numericValue, i, true, school.id]
+        );
+        
+        if (result.rows.length > 0) {
+          gradesCreated++;
+        }
+      }
+
+      // Create sections
+      for (let i = 0; i < sectionsPerGrade.length; i++) {
+        const sectionName = sectionsPerGrade[i];
+        
+        const result = await dbClient.query(
+          `INSERT INTO sections (
+            name, display_name, order_index, is_active, school_id, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+          ON CONFLICT (school_id, name) DO NOTHING
+          RETURNING id`,
+          [sectionName, `Section ${sectionName}`, i, true, school.id]
+        );
+        
+        if (result.rows.length > 0) {
+          sectionsCreated++;
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Synced class configuration for ${school.school_name}`,
+        data: {
+          schoolId: school.id,
+          schoolName: school.school_name,
+          gradesConfigured: gradesOffered.length,
+          sectionsConfigured: sectionsPerGrade.length,
+          gradesCreated,
+          sectionsCreated
+        }
+      });
+
+    } finally {
+      await dbClient.end();
+    }
+
+  } catch (error) {
+    console.error('Sync class config error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to sync class configuration',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Sync class grades and sections for ALL schools in a group
+ */
+export const syncAllSchoolsClassConfig = async (req, res) => {
+  try {
+    const groupId = req.query.groupId || req.user?.groupId;
+
+    if (!groupId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Group ID is required'
+      });
+    }
+
+    // Get group DB connection
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      // Get all schools
+      const schoolsResult = await dbClient.query(
+        `SELECT id, school_name, grades_offered, sections_per_grade FROM schools`
+      );
+
+      const results = [];
+
+      // Map grade names to numeric values
+      const gradeNumericMap = {
+        'Nursery': 0, 'LKG': 1, 'UKG': 2,
+        'Class 1': 1, 'Class 2': 2, 'Class 3': 3, 'Class 4': 4, 'Class 5': 5,
+        'Class 6': 6, 'Class 7': 7, 'Class 8': 8, 'Class 9': 9, 'Class 10': 10,
+        'Class 11': 11, 'Class 12': 12
+      };
+
+      for (const school of schoolsResult.rows) {
+        const gradesOffered = school.grades_offered || [];
+        const sectionsPerGrade = school.sections_per_grade || [];
+
+        let gradesCreated = 0;
+        let sectionsCreated = 0;
+
+        // Create class grades
+        for (let i = 0; i < gradesOffered.length; i++) {
+          const gradeName = gradesOffered[i];
+          const numericValue = gradeNumericMap[gradeName] || (i + 1);
+          
+          const result = await dbClient.query(
+            `INSERT INTO class_grades (
+              name, display_name, numeric_value, order_index, is_active, school_id, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+            ON CONFLICT (school_id, name, academic_session_id) DO NOTHING
+            RETURNING id`,
+            [gradeName, gradeName, numericValue, i, true, school.id]
+          );
+          
+          if (result.rows.length > 0) {
+            gradesCreated++;
+          }
+        }
+
+        // Create sections
+        for (let i = 0; i < sectionsPerGrade.length; i++) {
+          const sectionName = sectionsPerGrade[i];
+          
+          const result = await dbClient.query(
+            `INSERT INTO sections (
+              name, display_name, order_index, is_active, school_id, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+            ON CONFLICT (school_id, name) DO NOTHING
+            RETURNING id`,
+            [sectionName, `Section ${sectionName}`, i, true, school.id]
+          );
+          
+          if (result.rows.length > 0) {
+            sectionsCreated++;
+          }
+        }
+
+        results.push({
+          schoolId: school.id,
+          schoolName: school.school_name,
+          gradesConfigured: gradesOffered.length,
+          sectionsConfigured: sectionsPerGrade.length,
+          gradesCreated,
+          sectionsCreated
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Synced class configuration for ${results.length} schools`,
+        data: results
+      });
+
+    } finally {
+      await dbClient.end();
+    }
+
+  } catch (error) {
+    console.error('Sync all schools class config error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to sync class configurations',
       error: error.message
     });
   }
