@@ -165,21 +165,40 @@ export const saveTimetableEntry = async (req, res) => {
         }
       }
 
-      // 2. Class conflict - same class can't have two subjects at same time
+      // 2. Class conflict - same class can't have two different teachers at same time
       if (classSectionId) {
         const classConflict = await dbClient.query(
-          `SELECT te.*, s.name as subject_name
+          `SELECT te.*, s.name as subject_name,
+            t.first_name as teacher_first_name, t.last_name as teacher_last_name
           FROM timetable_entries te
           LEFT JOIN subjects s ON te.subject_id = s.id
+          LEFT JOIN teachers t ON te.teacher_id = t.id
           WHERE te.school_id = $1 AND te.academic_session_id = $2 
             AND te.day_of_week = $3 AND te.period_number = $4 
-            AND te.class_section_id = $5 AND te.is_active = true`,
+            AND te.class_section_id = $5`,
           [schoolId, academicSessionId, dayOfWeek, periodNumber, classSectionId]
         );
 
         if (classConflict.rows.length > 0) {
-          // Update existing entry instead of creating new one
-          const existingId = classConflict.rows[0].id;
+          const existingEntry = classConflict.rows[0];
+          const existingTeacherId = existingEntry.teacher_id ? String(existingEntry.teacher_id) : null;
+          const newTeacherId = teacherId ? String(teacherId) : null;
+          
+          // If a different teacher is already assigned, prevent the assignment
+          if (existingTeacherId && newTeacherId && existingTeacherId !== newTeacherId) {
+            const existingTeacherName = `${existingEntry.teacher_first_name || ''} ${existingEntry.teacher_last_name || ''}`.trim();
+            return res.status(400).json({
+              success: false,
+              message: `This period already has ${existingTeacherName} assigned${existingEntry.subject_name ? ` for ${existingEntry.subject_name}` : ''}. Please remove the existing assignment first before assigning a different teacher.`,
+              existingTeacher: {
+                id: existingEntry.teacher_id,
+                name: existingTeacherName
+              }
+            });
+          }
+          
+          // Update existing entry (same teacher or no teacher conflict)
+          const existingId = existingEntry.id;
           const result = await dbClient.query(
             `UPDATE timetable_entries SET
               teacher_id = $1, subject_id = $2, room = $3, notes = $4, period_id = $5, updated_at = CURRENT_TIMESTAMP
@@ -191,7 +210,35 @@ export const saveTimetableEntry = async (req, res) => {
         }
       }
 
-      // Insert new entry
+      // Insert new entry - check for existing entry with different teacher first (handles case when classSectionId was not provided above)
+      if (classSectionId && teacherId) {
+        const existingWithDifferentTeacher = await dbClient.query(
+          `SELECT te.teacher_id, t.first_name, t.last_name, s.name as subject_name
+          FROM timetable_entries te
+          LEFT JOIN teachers t ON te.teacher_id = t.id
+          LEFT JOIN subjects s ON te.subject_id = s.id
+          WHERE te.school_id = $1 AND te.academic_session_id = $2 
+            AND te.day_of_week = $3 AND te.period_number = $4 
+            AND te.class_section_id = $5 
+            AND te.teacher_id IS NOT NULL AND te.teacher_id != $6`,
+          [schoolId, academicSessionId, dayOfWeek, periodNumber, classSectionId, teacherId]
+        );
+        
+        if (existingWithDifferentTeacher.rows.length > 0) {
+          const existing = existingWithDifferentTeacher.rows[0];
+          const existingTeacherName = `${existing.first_name || ''} ${existing.last_name || ''}`.trim();
+          return res.status(400).json({
+            success: false,
+            message: `This period already has ${existingTeacherName} assigned${existing.subject_name ? ` for ${existing.subject_name}` : ''}. Please remove the existing assignment first before assigning a different teacher.`,
+            existingTeacher: {
+              id: existing.teacher_id,
+              name: existingTeacherName
+            }
+          });
+        }
+      }
+
+      // Only insert if there's no conflicting entry, or update if same teacher
       const result = await dbClient.query(
         `INSERT INTO timetable_entries (
           school_id, academic_session_id, day_of_week, period_number, period_id,
@@ -205,10 +252,45 @@ export const saveTimetableEntry = async (req, res) => {
           notes = EXCLUDED.notes,
           period_id = EXCLUDED.period_id,
           updated_at = CURRENT_TIMESTAMP
+        WHERE timetable_entries.teacher_id IS NULL 
+           OR timetable_entries.teacher_id = EXCLUDED.teacher_id
         RETURNING *`,
         [schoolId, academicSessionId, dayOfWeek, periodNumber, periodId || null, 
          teacherId || null, classSectionId || null, subjectId || null, room || null, notes || null]
       );
+
+      // If no rows returned, it means there's a conflict with a different teacher
+      if (result.rows.length === 0) {
+        // Fetch the existing entry to get teacher info for error message
+        const existingEntry = await dbClient.query(
+          `SELECT te.teacher_id, t.first_name, t.last_name, s.name as subject_name
+           FROM timetable_entries te
+           LEFT JOIN teachers t ON te.teacher_id = t.id
+           LEFT JOIN subjects s ON te.subject_id = s.id
+           WHERE te.school_id = $1 AND te.academic_session_id = $2 
+             AND te.day_of_week = $3 AND te.period_number = $4 
+             AND te.class_section_id = $5`,
+          [schoolId, academicSessionId, dayOfWeek, periodNumber, classSectionId]
+        );
+        
+        if (existingEntry.rows.length > 0) {
+          const existing = existingEntry.rows[0];
+          const existingTeacherName = `${existing.first_name || ''} ${existing.last_name || ''}`.trim();
+          return res.status(400).json({
+            success: false,
+            message: `This period already has ${existingTeacherName} assigned${existing.subject_name ? ` for ${existing.subject_name}` : ''}. Please remove the existing assignment first before assigning a different teacher.`,
+            existingTeacher: {
+              id: existing.teacher_id,
+              name: existingTeacherName
+            }
+          });
+        }
+        
+        return res.status(400).json({
+          success: false,
+          message: 'This period already has another teacher assigned. Please remove the existing assignment first.'
+        });
+      }
 
       res.status(201).json({ success: true, message: 'Timetable entry saved.', data: result.rows[0] });
     } finally {
@@ -696,10 +778,63 @@ export const bulkSaveTimetable = async (req, res) => {
     try {
       let saved = 0;
       let errors = [];
+      let conflicts = [];
 
       for (const entry of entries) {
         try {
-          await dbClient.query(
+          // Check for teacher conflict - same teacher in two classes at same time
+          if (entry.teacherId) {
+            const teacherConflict = await dbClient.query(
+              `SELECT te.*, cs.id as class_section_id,
+                cg.display_name as grade_name, sec.name as section_name
+              FROM timetable_entries te
+              LEFT JOIN class_sections cs ON te.class_section_id = cs.id
+              LEFT JOIN class_grades cg ON cs.class_grade_id = cg.id
+              LEFT JOIN sections sec ON cs.section_id = sec.id
+              WHERE te.school_id = $1 AND te.academic_session_id = $2 
+                AND te.day_of_week = $3 AND te.period_number = $4 
+                AND te.teacher_id = $5 AND te.class_section_id != $6
+                AND te.is_active = true`,
+              [schoolId, academicSessionId, entry.dayOfWeek, entry.periodNumber, entry.teacherId, 
+               entry.classSectionId || '00000000-0000-0000-0000-000000000000']
+            );
+
+            if (teacherConflict.rows.length > 0) {
+              const conflict = teacherConflict.rows[0];
+              conflicts.push({
+                entry,
+                message: `Teacher already assigned to ${conflict.grade_name} ${conflict.section_name} during ${entry.dayOfWeek} Period ${entry.periodNumber}`
+              });
+              continue;
+            }
+          }
+
+          // Check for class conflict - different teacher already assigned to same class/period
+          if (entry.classSectionId && entry.teacherId) {
+            const classConflict = await dbClient.query(
+              `SELECT te.*, t.first_name, t.last_name
+              FROM timetable_entries te
+              LEFT JOIN teachers t ON te.teacher_id = t.id
+              WHERE te.school_id = $1 AND te.academic_session_id = $2 
+                AND te.day_of_week = $3 AND te.period_number = $4 
+                AND te.class_section_id = $5 AND te.teacher_id IS NOT NULL
+                AND te.teacher_id::text != $6`,
+              [schoolId, academicSessionId, entry.dayOfWeek, entry.periodNumber, 
+               entry.classSectionId, String(entry.teacherId)]
+            );
+
+            if (classConflict.rows.length > 0) {
+              const existingTeacher = classConflict.rows[0];
+              const teacherName = `${existingTeacher.first_name || ''} ${existingTeacher.last_name || ''}`.trim();
+              conflicts.push({
+                entry,
+                message: `${entry.dayOfWeek} Period ${entry.periodNumber} already has ${teacherName} assigned. Remove existing assignment first.`
+              });
+              continue;
+            }
+          }
+
+          const insertResult = await dbClient.query(
             `INSERT INTO timetable_entries (
               school_id, academic_session_id, day_of_week, period_number, period_id,
               teacher_id, class_section_id, subject_id, room, notes
@@ -711,18 +846,49 @@ export const bulkSaveTimetable = async (req, res) => {
               room = EXCLUDED.room,
               notes = EXCLUDED.notes,
               period_id = EXCLUDED.period_id,
-              updated_at = CURRENT_TIMESTAMP`,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE timetable_entries.teacher_id IS NULL 
+               OR timetable_entries.teacher_id = EXCLUDED.teacher_id
+            RETURNING id`,
             [schoolId, academicSessionId, entry.dayOfWeek, entry.periodNumber, entry.periodId || null,
              entry.teacherId || null, entry.classSectionId || null, entry.subjectId || null, 
              entry.room || null, entry.notes || null]
           );
-          saved++;
+          
+          if (insertResult.rows.length === 0) {
+            // Conflict with different teacher - add to conflicts list
+            const existingEntry = await dbClient.query(
+              `SELECT t.first_name, t.last_name FROM timetable_entries te
+               LEFT JOIN teachers t ON te.teacher_id = t.id
+               WHERE te.school_id = $1 AND te.academic_session_id = $2 
+                 AND te.day_of_week = $3 AND te.period_number = $4 
+                 AND te.class_section_id = $5`,
+              [schoolId, academicSessionId, entry.dayOfWeek, entry.periodNumber, entry.classSectionId]
+            );
+            const teacherName = existingEntry.rows[0] 
+              ? `${existingEntry.rows[0].first_name || ''} ${existingEntry.rows[0].last_name || ''}`.trim()
+              : 'another teacher';
+            conflicts.push({
+              entry,
+              message: `${entry.dayOfWeek} Period ${entry.periodNumber} already has ${teacherName} assigned.`
+            });
+          } else {
+            saved++;
+          }
         } catch (e) {
           errors.push({ entry, error: e.message });
         }
       }
 
-      res.json({ success: true, message: `Saved ${saved} entries.`, errors });
+      const hasConflicts = conflicts.length > 0;
+      res.json({ 
+        success: !hasConflicts || saved > 0, 
+        message: hasConflicts 
+          ? `Saved ${saved} entries. ${conflicts.length} skipped due to conflicts.` 
+          : `Saved ${saved} entries.`, 
+        errors,
+        conflicts 
+      });
     } finally {
       await dbClient.end();
     }
