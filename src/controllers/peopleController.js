@@ -270,9 +270,9 @@ export const createStaffMember = async (req, res) => {
   try {
     const { groupId, schoolId } = req.user;
     const {
-      employeeId, firstName, lastName, email, phone, roleId, department, designation,
-      dateOfJoining, dateOfBirth, gender, address, city, state, pincode,
-      emergencyContactName, emergencyContactPhone, bloodGroup, salary
+      employeeId, firstName, lastName, email, phone, roleId, department, departmentId, designation,
+      dateOfJoining, joiningDate, dateOfBirth, gender, address, city, state, pincode,
+      emergencyContactName, emergencyContactPhone, bloodGroup, salary, status
     } = req.body;
 
     if (!firstName) {
@@ -293,26 +293,74 @@ export const createStaffMember = async (req, res) => {
         }
       }
 
+      // Handle empty strings for UUID fields - convert to null
+      const cleanRoleId = roleId && roleId.trim() !== '' && !roleId.startsWith('default-') ? roleId : null;
+      
+      // Department is a string field, not UUID - handle default-X IDs from frontend
+      let deptValue = null;
+      if (departmentId && departmentId.trim() !== '') {
+        // If it's a default-X ID, extract the department name from the mapping
+        if (departmentId.startsWith('default-')) {
+          const defaultDepts = {
+            'default-1': 'Administration',
+            'default-2': 'Accounts & Finance', 
+            'default-3': 'Human Resources',
+            'default-4': 'IT & Technology',
+            'default-5': 'Security',
+            'default-6': 'Housekeeping',
+            'default-7': 'Transport',
+            'default-8': 'Library',
+            'default-9': 'Laboratory',
+            'default-10': 'Sports & PE',
+            'default-11': 'Medical/Health',
+            'default-12': 'Canteen',
+            'default-13': 'Reception/Front Office'
+          };
+          deptValue = defaultDepts[departmentId] || departmentId;
+        } else {
+          deptValue = departmentId;
+        }
+      } else if (department && department.trim() !== '') {
+        deptValue = department;
+      }
+      
+      // Use joiningDate if dateOfJoining is not provided
+      const joinDate = dateOfJoining || joiningDate || null;
+
       const result = await dbClient.query(
         `INSERT INTO staff_members (
           school_id, employee_id, first_name, last_name, email, phone, role_id,
           department, designation, date_of_joining, date_of_birth, gender,
           address, city, state, pincode, emergency_contact_name, emergency_contact_phone,
-          blood_group, salary
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          blood_group, salary, status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
         RETURNING *`,
         [
-          schoolId, employeeId, firstName, lastName, email, phone, roleId,
-          department, designation, dateOfJoining, dateOfBirth, gender,
-          address, city, state, pincode, emergencyContactName, emergencyContactPhone,
-          bloodGroup, salary
+          schoolId, employeeId || null, firstName, lastName || null, email || null, phone || null, cleanRoleId,
+          deptValue, designation || null, joinDate, dateOfBirth || null, gender || null,
+          address || null, city || null, state || null, pincode || null, emergencyContactName || null, emergencyContactPhone || null,
+          bloodGroup || null, salary || null, status || 'active'
         ]
       );
 
       res.status(201).json({
         success: true,
         message: 'Staff member added successfully',
-        data: result.rows[0]
+        data: {
+          id: result.rows[0].id,
+          employeeId: result.rows[0].employee_id,
+          firstName: result.rows[0].first_name,
+          lastName: result.rows[0].last_name,
+          email: result.rows[0].email,
+          phone: result.rows[0].phone,
+          roleId: result.rows[0].role_id,
+          department: result.rows[0].department,
+          departmentId: result.rows[0].department,
+          designation: result.rows[0].designation,
+          joiningDate: result.rows[0].date_of_joining,
+          status: result.rows[0].status,
+          createdAt: result.rows[0].created_at
+        }
       });
 
     } finally {
@@ -334,13 +382,46 @@ export const updateStaffMember = async (req, res) => {
     const dbClient = await getGroupDbClient(groupId);
 
     try {
+      // Handle empty strings for UUID fields - convert to null
+      const cleanRoleId = updates.roleId && updates.roleId.trim() !== '' && !updates.roleId.startsWith('default-') ? updates.roleId : null;
+      
+      // Department is a string field, not UUID - handle default-X IDs from frontend
+      let deptValue = null;
+      if (updates.departmentId && updates.departmentId.trim() !== '') {
+        if (updates.departmentId.startsWith('default-')) {
+          const defaultDepts = {
+            'default-1': 'Administration',
+            'default-2': 'Accounts & Finance', 
+            'default-3': 'Human Resources',
+            'default-4': 'IT & Technology',
+            'default-5': 'Security',
+            'default-6': 'Housekeeping',
+            'default-7': 'Transport',
+            'default-8': 'Library',
+            'default-9': 'Laboratory',
+            'default-10': 'Sports & PE',
+            'default-11': 'Medical/Health',
+            'default-12': 'Canteen',
+            'default-13': 'Reception/Front Office'
+          };
+          deptValue = defaultDepts[updates.departmentId] || updates.departmentId;
+        } else {
+          deptValue = updates.departmentId;
+        }
+      } else if (updates.department && updates.department.trim() !== '') {
+        deptValue = updates.department;
+      }
+      
+      // Use joiningDate if dateOfJoining is not provided
+      const joinDate = updates.dateOfJoining || updates.joiningDate || null;
+
       const result = await dbClient.query(
         `UPDATE staff_members SET
           first_name = COALESCE($1, first_name),
           last_name = COALESCE($2, last_name),
           email = COALESCE($3, email),
           phone = COALESCE($4, phone),
-          role_id = COALESCE($5, role_id),
+          role_id = $5,
           department = COALESCE($6, department),
           designation = COALESCE($7, designation),
           date_of_joining = COALESCE($8, date_of_joining),
@@ -357,11 +438,11 @@ export const updateStaffMember = async (req, res) => {
         WHERE id = $18 AND school_id = $19
         RETURNING *`,
         [
-          updates.firstName, updates.lastName, updates.email, updates.phone,
-          updates.roleId, updates.department, updates.designation,
-          updates.dateOfJoining, updates.dateOfBirth, updates.gender,
-          updates.address, updates.city, updates.state, updates.pincode,
-          updates.salary, updates.isActive, updates.status, id, schoolId
+          updates.firstName || null, updates.lastName || null, updates.email || null, updates.phone || null,
+          cleanRoleId, deptValue, updates.designation || null,
+          joinDate, updates.dateOfBirth || null, updates.gender || null,
+          updates.address || null, updates.city || null, updates.state || null, updates.pincode || null,
+          updates.salary || null, updates.isActive, updates.status || null, id, schoolId
         ]
       );
 
@@ -369,7 +450,25 @@ export const updateStaffMember = async (req, res) => {
         return res.status(404).json({ success: false, message: 'Staff member not found' });
       }
 
-      res.json({ success: true, message: 'Staff member updated successfully', data: result.rows[0] });
+      res.json({ 
+        success: true, 
+        message: 'Staff member updated successfully', 
+        data: {
+          id: result.rows[0].id,
+          employeeId: result.rows[0].employee_id,
+          firstName: result.rows[0].first_name,
+          lastName: result.rows[0].last_name,
+          email: result.rows[0].email,
+          phone: result.rows[0].phone,
+          roleId: result.rows[0].role_id,
+          department: result.rows[0].department,
+          departmentId: result.rows[0].department,
+          designation: result.rows[0].designation,
+          joiningDate: result.rows[0].date_of_joining,
+          status: result.rows[0].status,
+          createdAt: result.rows[0].created_at
+        }
+      });
 
     } finally {
       await dbClient.end();
