@@ -517,35 +517,103 @@ export const deleteStaffMember = async (req, res) => {
 export const getParents = async (req, res) => {
   try {
     const { groupId, schoolId } = req.user;
-    const { parent_type, is_active } = req.query;
+    const { parent_type, is_active, include_students, academic_session_id } = req.query;
 
     const dbClient = await getGroupDbClient(groupId);
 
     try {
-      let query = `SELECT * FROM parents WHERE school_id = $1`;
+      // If academic_session_id is provided, only get parents linked to students in that session
+      let query;
       const params = [schoolId];
       let paramIndex = 2;
 
+      if (academic_session_id) {
+        // Get parents who have students in the specified academic session
+        query = `
+          SELECT DISTINCT p.* 
+          FROM parents p
+          INNER JOIN student_parents sp ON p.id = sp.parent_id
+          INNER JOIN students s ON sp.student_id = s.id
+          WHERE p.school_id = $1 AND s.academic_session_id = $${paramIndex}
+        `;
+        params.push(academic_session_id);
+        paramIndex++;
+      } else {
+        query = `SELECT * FROM parents WHERE school_id = $1`;
+      }
+
       if (parent_type) {
-        query += ` AND parent_type = $${paramIndex}`;
+        query += ` AND p.parent_type = $${paramIndex}`;
         params.push(parent_type);
         paramIndex++;
       }
 
       if (is_active !== undefined) {
-        query += ` AND is_active = $${paramIndex}`;
+        query += ` AND ${academic_session_id ? 'p.' : ''}is_active = $${paramIndex}`;
         params.push(is_active === 'true');
       }
 
-      query += ` ORDER BY first_name ASC`;
+      query += ` ORDER BY ${academic_session_id ? 'p.' : ''}first_name ASC`;
 
       const result = await dbClient.query(query, params);
+
+      // Get linked students for each parent if requested
+      let parentStudentsMap = {};
+      if (include_students === 'true' && result.rows.length > 0) {
+        const parentIds = result.rows.map(r => r.id);
+        
+        // Build query with optional academic session filter
+        let studentsQuery = `
+          SELECT sp.parent_id, sp.relationship, sp.is_primary, sp.is_guardian,
+                 s.id as student_id, s.first_name, s.last_name, s.admission_number, s.roll_number,
+                 s.photo_url, s.status,
+                 cg.display_name as class_name, sec.name as section_name
+          FROM student_parents sp
+          JOIN students s ON sp.student_id = s.id
+          LEFT JOIN class_sections cs ON s.current_class_section_id = cs.id
+          LEFT JOIN class_grades cg ON cs.class_grade_id = cg.id
+          LEFT JOIN sections sec ON cs.section_id = sec.id
+          WHERE sp.parent_id = ANY($1) AND s.status = 'active'
+        `;
+        const studentsParams = [parentIds];
+        
+        if (academic_session_id) {
+          studentsQuery += ` AND s.academic_session_id = $2`;
+          studentsParams.push(academic_session_id);
+        }
+        
+        studentsQuery += ` ORDER BY s.first_name ASC`;
+        
+        const studentsResult = await dbClient.query(studentsQuery, studentsParams);
+
+        // Group students by parent_id
+        studentsResult.rows.forEach(row => {
+          if (!parentStudentsMap[row.parent_id]) {
+            parentStudentsMap[row.parent_id] = [];
+          }
+          parentStudentsMap[row.parent_id].push({
+            id: row.student_id,
+            firstName: row.first_name,
+            lastName: row.last_name,
+            fullName: `${row.first_name} ${row.last_name || ''}`.trim(),
+            admissionNumber: row.admission_number,
+            rollNumber: row.roll_number,
+            photoUrl: row.photo_url,
+            status: row.status,
+            className: row.class_name ? `${row.class_name}${row.section_name ? ' - ' + row.section_name : ''}` : null,
+            relationship: row.relationship,
+            isPrimary: row.is_primary,
+            isGuardian: row.is_guardian
+          });
+        });
+      }
 
       res.json({
         success: true,
         data: result.rows.map(row => ({
           id: row.id,
           parentType: row.parent_type,
+          relationship: row.parent_type,
           firstName: row.first_name,
           lastName: row.last_name,
           fullName: `${row.first_name} ${row.last_name || ''}`.trim(),
@@ -564,7 +632,11 @@ export const getParents = async (req, res) => {
           isEmergencyContact: row.is_emergency_contact,
           profilePhotoUrl: row.profile_photo_url,
           isActive: row.is_active,
-          createdAt: row.created_at
+          hasLoginAccess: row.can_login,
+          canLogin: row.can_login,
+          createdAt: row.created_at,
+          // Include linked students if requested
+          students: parentStudentsMap[row.id] || []
         }))
       });
 
@@ -704,6 +776,148 @@ export const deleteParent = async (req, res) => {
   } catch (error) {
     console.error('Delete parent error:', error);
     res.status(500).json({ success: false, message: 'Failed to delete parent', error: error.message });
+  }
+};
+
+
+// =====================================================
+// STAFF LOGIN ACCESS MANAGEMENT
+// =====================================================
+
+export const updateStaffAccess = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const { id } = req.params;
+    const { canLogin, password, roleId } = req.body;
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      // Build update query dynamically
+      let updates = [];
+      let params = [];
+      let paramIndex = 1;
+
+      if (canLogin !== undefined) {
+        updates.push(`can_login = $${paramIndex}`);
+        params.push(canLogin);
+        paramIndex++;
+      }
+
+      if (password) {
+        const bcrypt = await import('bcryptjs');
+        const hashedPassword = await bcrypt.hash(password, 10);
+        updates.push(`password_hash = $${paramIndex}`);
+        params.push(hashedPassword);
+        paramIndex++;
+      }
+
+      if (roleId !== undefined) {
+        updates.push(`role_id = $${paramIndex}`);
+        params.push(roleId || null);
+        paramIndex++;
+      }
+
+      updates.push(`updated_at = NOW()`);
+
+      params.push(id, schoolId);
+
+      const result = await dbClient.query(
+        `UPDATE staff_members SET ${updates.join(', ')} WHERE id = $${paramIndex} AND school_id = $${paramIndex + 1} RETURNING *`,
+        params
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Staff member not found' });
+      }
+
+      res.json({ 
+        success: true, 
+        message: canLogin ? 'Login enabled successfully' : 'Access updated successfully',
+        data: {
+          id: result.rows[0].id,
+          canLogin: result.rows[0].can_login,
+          hasPassword: !!result.rows[0].password_hash
+        }
+      });
+
+    } finally {
+      await dbClient.end();
+    }
+
+  } catch (error) {
+    console.error('Update staff access error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update staff access', error: error.message });
+  }
+};
+
+export const toggleStaffLogin = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const { id } = req.params;
+    const { enable } = req.body;
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      const result = await dbClient.query(
+        `UPDATE staff_members SET can_login = $1, updated_at = NOW() WHERE id = $2 AND school_id = $3 RETURNING *`,
+        [enable, id, schoolId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Staff member not found' });
+      }
+
+      res.json({ 
+        success: true, 
+        message: enable ? 'Login enabled' : 'Login disabled'
+      });
+
+    } finally {
+      await dbClient.end();
+    }
+
+  } catch (error) {
+    console.error('Toggle staff login error:', error);
+    res.status(500).json({ success: false, message: 'Failed to toggle login access', error: error.message });
+  }
+};
+
+export const resetStaffPassword = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const { id } = req.params;
+    const { password } = req.body;
+
+    if (!password || password.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    }
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      const bcrypt = await import('bcryptjs');
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      const result = await dbClient.query(
+        `UPDATE staff_members SET password_hash = $1, can_login = true, updated_at = NOW() WHERE id = $2 AND school_id = $3 RETURNING id`,
+        [hashedPassword, id, schoolId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Staff member not found' });
+      }
+
+      res.json({ success: true, message: 'Password reset successfully' });
+
+    } finally {
+      await dbClient.end();
+    }
+
+  } catch (error) {
+    console.error('Reset staff password error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset password', error: error.message });
   }
 };
 

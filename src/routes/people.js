@@ -11,6 +11,10 @@ import {
   createStaffMember,
   updateStaffMember,
   deleteStaffMember,
+  // Staff Access Management
+  updateStaffAccess,
+  toggleStaffLogin,
+  resetStaffPassword,
   // Parents
   getParents,
   createParent,
@@ -40,6 +44,11 @@ router.get('/staff', getStaffMembers);
 router.post('/staff', createStaffMember);
 router.put('/staff/:id', updateStaffMember);
 router.delete('/staff/:id', deleteStaffMember);
+
+// Staff Access Management Routes
+router.put('/staff/:id/access', updateStaffAccess);
+router.post('/staff/:id/toggle-login', toggleStaffLogin);
+router.post('/staff/:id/reset-password', resetStaffPassword);
 
 // Parents Routes
 router.get('/parents', getParents);

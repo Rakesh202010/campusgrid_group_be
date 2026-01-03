@@ -9,6 +9,7 @@ import {
   getStudentStats,
   upsertParent,
   deleteParent,
+  linkExistingParent,
   promoteStudents,
   getNextAdmissionNumber,
   exportStudents,
@@ -39,6 +40,7 @@ router.delete('/:id', deleteStudent);
 
 // Parent routes
 router.post('/:studentId/parents', upsertParent);
+router.post('/:studentId/parents/link', linkExistingParent);
 router.put('/:studentId/parents/:parentId', upsertParent);
 router.delete('/:studentId/parents/:parentId', deleteParent);
 

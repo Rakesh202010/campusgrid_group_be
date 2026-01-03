@@ -768,7 +768,7 @@ export const getStudentStats = async (req, res) => {
 export const upsertParent = async (req, res) => {
   try {
     const { groupId, schoolId } = req.user;
-    const { studentId } = req.params;
+    const { studentId, parentId } = req.params;
     const parentData = req.body;
 
     const dbClient = await getGroupDbClient(groupId);
@@ -784,92 +784,181 @@ export const upsertParent = async (req, res) => {
         return res.status(404).json({ success: false, message: 'Student not found.' });
       }
 
-      if (parentData.id) {
-        // Update existing parent
+      let finalParentId = parentId || parentData.id;
+
+      if (finalParentId) {
+        // Update existing parent in parents table
+        await dbClient.query(`
+          UPDATE parents SET
+            parent_type = $1,
+            first_name = $2,
+            last_name = $3,
+            email = $4,
+            phone = $5,
+            alternate_phone = $6,
+            occupation = $7,
+            address = $8,
+            city = $9,
+            state = $10,
+            pincode = $11,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $12 AND school_id = $13
+        `, [
+          parentData.relationship || 'guardian',
+          parentData.firstName,
+          parentData.lastName || null,
+          parentData.email || null,
+          parentData.phone || null,
+          parentData.alternatePhone || null,
+          parentData.occupation || null,
+          parentData.address || null,
+          parentData.city || null,
+          parentData.state || null,
+          parentData.pincode || null,
+          finalParentId,
+          schoolId
+        ]);
+
+        // Update the link in student_parents
         await dbClient.query(`
           UPDATE student_parents SET
-            relationship = $1, is_primary_contact = $2,
-            first_name = $3, last_name = $4, occupation = $5, qualification = $6, annual_income = $7,
-            email = $8, phone = $9, alternate_phone = $10,
-            same_as_student_address = $11, address_line1 = $12, address_line2 = $13, 
-            city = $14, state = $15, pincode = $16,
-            office_name = $17, office_address = $18, office_phone = $19, aadhar_number = $20,
-            updated_at = CURRENT_TIMESTAMP
-          WHERE id = $21 AND student_id = $22
+            relationship = $1,
+            is_primary = $2,
+            is_guardian = $3
+          WHERE student_id = $4 AND parent_id = $5
         `, [
-          parentData.relationship,
-          parentData.isPrimaryContact || false,
-          parentData.firstName,
-          parentData.lastName || null,
-          parentData.occupation || null,
-          parentData.qualification || null,
-          parentData.annualIncome || null,
-          parentData.email || null,
-          parentData.phone,
-          parentData.alternatePhone || null,
-          parentData.sameAsStudentAddress !== false,
-          parentData.address?.line1 || null,
-          parentData.address?.line2 || null,
-          parentData.address?.city || null,
-          parentData.address?.state || null,
-          parentData.address?.pincode || null,
-          parentData.officeName || null,
-          parentData.officeAddress || null,
-          parentData.officePhone || null,
-          parentData.aadharNumber || null,
-          parentData.id,
-          studentId
+          parentData.relationship || 'guardian',
+          parentData.isPrimary || false,
+          parentData.isGuardian || false,
+          studentId,
+          finalParentId
         ]);
       } else {
-        // Insert new parent
-        await dbClient.query(`
-          INSERT INTO student_parents (
-            student_id, school_id, relationship, is_primary_contact,
-            first_name, last_name, occupation, qualification, annual_income,
-            email, phone, alternate_phone,
-            same_as_student_address, address_line1, address_line2, city, state, pincode,
-            office_name, office_address, office_phone, aadhar_number
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+        // Insert new parent in parents table
+        const parentResult = await dbClient.query(`
+          INSERT INTO parents (
+            school_id, parent_type, first_name, last_name, email, phone,
+            alternate_phone, occupation, address, city, state, pincode, is_active
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true)
+          RETURNING id
         `, [
-          studentId,
           schoolId,
           parentData.relationship || 'guardian',
-          parentData.isPrimaryContact || false,
           parentData.firstName,
           parentData.lastName || null,
-          parentData.occupation || null,
-          parentData.qualification || null,
-          parentData.annualIncome || null,
           parentData.email || null,
-          parentData.phone,
+          parentData.phone || null,
           parentData.alternatePhone || null,
-          parentData.sameAsStudentAddress !== false,
-          parentData.address?.line1 || null,
-          parentData.address?.line2 || null,
-          parentData.address?.city || null,
-          parentData.address?.state || null,
-          parentData.address?.pincode || null,
-          parentData.officeName || null,
-          parentData.officeAddress || null,
-          parentData.officePhone || null,
-          parentData.aadharNumber || null
+          parentData.occupation || null,
+          parentData.address || null,
+          parentData.city || null,
+          parentData.state || null,
+          parentData.pincode || null
+        ]);
+
+        finalParentId = parentResult.rows[0].id;
+
+        // Create link in student_parents
+        await dbClient.query(`
+          INSERT INTO student_parents (student_id, parent_id, relationship, is_primary, is_guardian)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (student_id, parent_id) DO UPDATE SET
+            relationship = EXCLUDED.relationship,
+            is_primary = EXCLUDED.is_primary,
+            is_guardian = EXCLUDED.is_guardian
+        `, [
+          studentId,
+          finalParentId,
+          parentData.relationship || 'guardian',
+          parentData.isPrimary || false,
+          parentData.isGuardian || false
         ]);
       }
 
       res.json({
         success: true,
-        message: parentData.id ? 'Parent updated successfully.' : 'Parent added successfully.'
+        message: parentId || parentData.id ? 'Parent updated successfully.' : 'Parent added successfully.',
+        data: { parentId: finalParentId }
       });
     } finally {
       await dbClient.end();
     }
   } catch (error) {
     console.error('Error saving parent:', error);
-    res.status(500).json({ success: false, message: 'Failed to save parent information.' });
+    res.status(500).json({ success: false, message: 'Failed to save parent information.', error: error.message });
   }
 };
 
-// Delete parent
+// Link an existing parent to a student
+export const linkExistingParent = async (req, res) => {
+  try {
+    const { groupId, schoolId } = req.user;
+    const { studentId } = req.params;
+    const { parentId, relationship, isPrimary, isGuardian } = req.body;
+
+    if (!parentId) {
+      return res.status(400).json({ success: false, message: 'Parent ID is required.' });
+    }
+
+    const dbClient = await getGroupDbClient(groupId);
+
+    try {
+      // Verify student exists
+      const studentCheck = await dbClient.query(
+        'SELECT id FROM students WHERE id = $1 AND school_id = $2',
+        [studentId, schoolId]
+      );
+
+      if (studentCheck.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Student not found.' });
+      }
+
+      // Verify parent exists
+      const parentCheck = await dbClient.query(
+        'SELECT id FROM parents WHERE id = $1 AND school_id = $2',
+        [parentId, schoolId]
+      );
+
+      if (parentCheck.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Parent not found.' });
+      }
+
+      // Check if already linked
+      const linkCheck = await dbClient.query(
+        'SELECT id FROM student_parents WHERE student_id = $1 AND parent_id = $2',
+        [studentId, parentId]
+      );
+
+      if (linkCheck.rows.length > 0) {
+        return res.status(400).json({ success: false, message: 'This parent is already linked to this student.' });
+      }
+
+      // Create the link
+      await dbClient.query(`
+        INSERT INTO student_parents (student_id, parent_id, relationship, is_primary, is_guardian)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        studentId,
+        parentId,
+        relationship || 'guardian',
+        isPrimary || false,
+        isGuardian || false
+      ]);
+
+      res.json({
+        success: true,
+        message: 'Parent linked to student successfully.'
+      });
+    } finally {
+      await dbClient.end();
+    }
+  } catch (error) {
+    console.error('Error linking parent:', error);
+    res.status(500).json({ success: false, message: 'Failed to link parent.', error: error.message });
+  }
+};
+
+// Delete parent (removes link from student_parents)
 export const deleteParent = async (req, res) => {
   try {
     const { groupId, schoolId } = req.user;
@@ -878,10 +967,25 @@ export const deleteParent = async (req, res) => {
     const dbClient = await getGroupDbClient(groupId);
 
     try {
+      // Delete the link from student_parents
       await dbClient.query(
-        'DELETE FROM student_parents WHERE id = $1 AND student_id = $2 AND school_id = $3',
-        [parentId, studentId, schoolId]
+        'DELETE FROM student_parents WHERE student_id = $1 AND parent_id = $2',
+        [studentId, parentId]
       );
+
+      // Check if this parent is linked to any other students
+      const otherLinksResult = await dbClient.query(
+        'SELECT COUNT(*) as count FROM student_parents WHERE parent_id = $1',
+        [parentId]
+      );
+
+      // If no other links, optionally delete the parent record too
+      if (parseInt(otherLinksResult.rows[0].count) === 0) {
+        await dbClient.query(
+          'DELETE FROM parents WHERE id = $1 AND school_id = $2',
+          [parentId, schoolId]
+        );
+      }
 
       res.json({ success: true, message: 'Parent removed successfully.' });
     } finally {
@@ -889,7 +993,7 @@ export const deleteParent = async (req, res) => {
     }
   } catch (error) {
     console.error('Error deleting parent:', error);
-    res.status(500).json({ success: false, message: 'Failed to remove parent.' });
+    res.status(500).json({ success: false, message: 'Failed to remove parent.', error: error.message });
   }
 };
 
