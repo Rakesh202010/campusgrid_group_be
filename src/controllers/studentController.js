@@ -168,12 +168,14 @@ export const getStudentById = async (req, res) => {
           cs.id as class_section_id,
           cg.name as grade_name, cg.display_name as grade_display_name,
           sec.name as section_name,
-          acs.name as session_name
+          acs.name as session_name,
+          st.id as stream_id, st.name as stream_name, st.display_name as stream_display_name, st.color as stream_color
         FROM students s
         LEFT JOIN class_sections cs ON s.current_class_section_id = cs.id
         LEFT JOIN class_grades cg ON cs.class_grade_id = cg.id
         LEFT JOIN sections sec ON cs.section_id = sec.id
         LEFT JOIN academic_sessions acs ON s.academic_session_id = acs.id
+        LEFT JOIN streams st ON s.stream_id = st.id
         WHERE s.id = $1 AND s.school_id = $2
       `;
       const studentResult = await dbClient.query(studentQuery, [id, schoolId]);
@@ -271,6 +273,13 @@ export const getStudentById = async (req, res) => {
           sectionName: row.section_name,
           sessionName: row.session_name,
           academicSessionId: row.academic_session_id,
+          streamId: row.stream_id,
+          stream: row.stream_id ? {
+            id: row.stream_id,
+            name: row.stream_name,
+            displayName: row.stream_display_name || row.stream_name,
+            color: row.stream_color
+          } : null,
           parents: parentsResult.rows.map(p => ({
             id: p.id,
             relationship: p.relationship || p.parent_type,
@@ -560,6 +569,7 @@ export const updateStudent = async (req, res) => {
         classSectionId: 'current_class_section_id',
         rollNumber: 'roll_number',
         academicSessionId: 'academic_session_id',
+        streamId: 'stream_id',
         firstName: 'first_name',
         middleName: 'middle_name',
         lastName: 'last_name',
