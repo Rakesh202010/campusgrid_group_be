@@ -14,13 +14,17 @@ export const getTeacherTimetable = async (req, res) => {
     const dbClient = await getGroupDbClient(groupId);
 
     try {
+      // Get day-specific timings (including breaks)
+      const { dayTemplateMap, templatePeriodsMap, templateAllPeriodsMap, defaultTemplateId, dayNameToNum } = 
+        await getDayTimingsMap(dbClient, schoolId);
+
       const result = await dbClient.query(
         `SELECT te.*,
           s.name as subject_name, s.code as subject_code,
           cs.id as class_section_id,
           cg.name as grade_name, cg.display_name as grade_display_name,
           sec.name as section_name,
-          cp.name as period_name, cp.start_time, cp.end_time
+          cp.name as period_name, cp.start_time as default_start_time, cp.end_time as default_end_time
         FROM timetable_entries te
         LEFT JOIN subjects s ON te.subject_id = s.id
         LEFT JOIN class_sections cs ON te.class_section_id = cs.id
@@ -32,18 +36,36 @@ export const getTeacherTimetable = async (req, res) => {
         [schoolId, teacherId, academic_session_id]
       );
 
-      // Convert to a map format for frontend
+      // Convert to a map format for frontend with day-specific timings
       const timetableMap = {};
       result.rows.forEach(row => {
         const key = `${row.day_of_week}-${row.period_number}`;
+        
+        // Get the day number and find the appropriate template
+        const dayNum = dayNameToNum[row.day_of_week];
+        const templateId = dayTemplateMap[dayNum] || defaultTemplateId;
+        
+        // Get period timings from the day's template
+        let startTime = row.default_start_time;
+        let endTime = row.default_end_time;
+        let periodName = row.period_name;
+        
+        if (templateId && templatePeriodsMap[templateId] && templatePeriodsMap[templateId][row.period_number]) {
+          const periodTiming = templatePeriodsMap[templateId][row.period_number];
+          startTime = periodTiming.startTime;
+          endTime = periodTiming.endTime;
+          periodName = periodTiming.name || row.period_name;
+        }
+        
         timetableMap[key] = {
           id: row.id,
           dayOfWeek: row.day_of_week,
           periodNumber: row.period_number,
           periodId: row.period_id,
-          periodName: row.period_name,
-          startTime: row.start_time,
-          endTime: row.end_time,
+          periodName: periodName,
+          startTime: startTime,
+          endTime: endTime,
+          periodType: 'regular',
           teacherId: row.teacher_id,
           classSectionId: row.class_section_id,
           className: row.grade_display_name || row.grade_name,
@@ -56,7 +78,55 @@ export const getTeacherTimetable = async (req, res) => {
         };
       });
 
-      res.json({ success: true, data: timetableMap });
+      // Build day schedules with all periods (including breaks)
+      const daySchedules = {};
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      
+      dayNames.forEach((dayName, dayNum) => {
+        const templateId = dayTemplateMap[dayNum] || defaultTemplateId;
+        const allPeriods = templateAllPeriodsMap[templateId] || [];
+        
+        // Build complete schedule for this day with timetable entries merged
+        const schedule = allPeriods.map(period => {
+          const key = `${dayName}-${period.periodNumber}`;
+          const entry = timetableMap[key];
+          
+          if (period.periodType === 'break' || period.periodType === 'lunch') {
+            // Return break period as-is
+            return {
+              periodNumber: period.periodNumber,
+              periodName: period.name,
+              startTime: period.startTime,
+              endTime: period.endTime,
+              periodType: period.periodType,
+              durationMinutes: period.durationMinutes,
+              isBreak: true
+            };
+          } else if (entry) {
+            // Return timetable entry with class info
+            return { ...entry, isBreak: false };
+          } else {
+            // Return empty/free period slot
+            return {
+              periodNumber: period.periodNumber,
+              periodName: period.name,
+              startTime: period.startTime,
+              endTime: period.endTime,
+              periodType: 'regular',
+              isBreak: false,
+              isFree: true
+            };
+          }
+        });
+        
+        daySchedules[dayName] = schedule;
+      });
+
+      res.json({ 
+        success: true, 
+        data: timetableMap,
+        daySchedules: daySchedules
+      });
     } finally {
       await dbClient.end();
     }
@@ -64,6 +134,86 @@ export const getTeacherTimetable = async (req, res) => {
     console.error('Error getting teacher timetable:', error);
     res.status(500).json({ success: false, message: 'Failed to retrieve timetable.' });
   }
+};
+
+// Helper: Get day-specific period timings
+const getDayTimingsMap = async (dbClient, schoolId) => {
+  // Map day names to day numbers (JavaScript convention)
+  const dayNameToNum = {
+    'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
+    'Thursday': 4, 'Friday': 5, 'Saturday': 6
+  };
+  
+  // Get default template
+  const defaultTemplate = await dbClient.query(
+    `SELECT id FROM class_timing_templates WHERE school_id = $1 AND is_default = true AND is_active = true LIMIT 1`,
+    [schoolId]
+  );
+  const defaultTemplateId = defaultTemplate.rows[0]?.id;
+
+  // Get day-to-template mapping
+  const dayTimings = await dbClient.query(
+    `SELECT day_of_week, template_id, is_working_day FROM school_day_timings WHERE school_id = $1`,
+    [schoolId]
+  );
+
+  // Build day -> template map
+  const dayTemplateMap = {};
+  dayTimings.rows.forEach(row => {
+    const dayNum = row.day_of_week;
+    dayTemplateMap[dayNum] = row.template_id || defaultTemplateId;
+  });
+
+  // Get all period timings for all templates (including breaks)
+  const periods = await dbClient.query(
+    `SELECT cp.template_id, cp.period_number, cp.name, cp.start_time, cp.end_time, 
+            cp.period_type, cp.order_index, cp.duration_minutes
+     FROM class_periods cp
+     WHERE cp.school_id = $1 AND cp.is_active = true
+     ORDER BY cp.template_id, cp.order_index, cp.start_time`,
+    [schoolId]
+  );
+
+  // Build template -> period timings map (regular periods)
+  // Build template -> all periods list (including breaks, sorted by time)
+  const templatePeriodsMap = {};
+  const templateAllPeriodsMap = {};
+  
+  periods.rows.forEach(row => {
+    if (!templatePeriodsMap[row.template_id]) {
+      templatePeriodsMap[row.template_id] = {};
+      templateAllPeriodsMap[row.template_id] = [];
+    }
+    
+    const periodData = {
+      periodNumber: row.period_number,
+      name: row.name,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      periodType: row.period_type || 'regular',
+      orderIndex: row.order_index,
+      durationMinutes: row.duration_minutes
+    };
+    
+    // For regular periods, add to the map by period number
+    if (row.period_type === 'regular' || !row.period_type) {
+      templatePeriodsMap[row.template_id][row.period_number] = periodData;
+    }
+    
+    // Add all periods (including breaks) to the list
+    templateAllPeriodsMap[row.template_id].push(periodData);
+  });
+
+  // Sort all periods by start time for each template
+  Object.keys(templateAllPeriodsMap).forEach(templateId => {
+    templateAllPeriodsMap[templateId].sort((a, b) => {
+      const timeA = a.startTime ? a.startTime.toString() : '99:99:99';
+      const timeB = b.startTime ? b.startTime.toString() : '99:99:99';
+      return timeA.localeCompare(timeB);
+    });
+  });
+
+  return { dayTemplateMap, templatePeriodsMap, templateAllPeriodsMap, defaultTemplateId, dayNameToNum };
 };
 
 // Get timetable for a class
@@ -76,11 +226,15 @@ export const getClassTimetable = async (req, res) => {
     const dbClient = await getGroupDbClient(groupId);
 
     try {
+      // Get day-specific timings (including breaks)
+      const { dayTemplateMap, templatePeriodsMap, templateAllPeriodsMap, defaultTemplateId, dayNameToNum } = 
+        await getDayTimingsMap(dbClient, schoolId);
+
       const result = await dbClient.query(
         `SELECT te.*,
           s.name as subject_name, s.code as subject_code,
           t.first_name as teacher_first_name, t.last_name as teacher_last_name,
-          cp.name as period_name, cp.start_time, cp.end_time
+          cp.name as period_name, cp.start_time as default_start_time, cp.end_time as default_end_time
         FROM timetable_entries te
         LEFT JOIN subjects s ON te.subject_id = s.id
         LEFT JOIN teachers t ON te.teacher_id = t.id
@@ -90,18 +244,36 @@ export const getClassTimetable = async (req, res) => {
         [schoolId, classSectionId, academic_session_id]
       );
 
-      // Convert to a map format for frontend
+      // Convert to a map format for frontend with day-specific timings
       const timetableMap = {};
       result.rows.forEach(row => {
         const key = `${row.day_of_week}-${row.period_number}`;
+        
+        // Get the day number and find the appropriate template
+        const dayNum = dayNameToNum[row.day_of_week];
+        const templateId = dayTemplateMap[dayNum] || defaultTemplateId;
+        
+        // Get period timings from the day's template
+        let startTime = row.default_start_time;
+        let endTime = row.default_end_time;
+        let periodName = row.period_name;
+        
+        if (templateId && templatePeriodsMap[templateId] && templatePeriodsMap[templateId][row.period_number]) {
+          const periodTiming = templatePeriodsMap[templateId][row.period_number];
+          startTime = periodTiming.startTime;
+          endTime = periodTiming.endTime;
+          periodName = periodTiming.name || row.period_name;
+        }
+        
         timetableMap[key] = {
           id: row.id,
           dayOfWeek: row.day_of_week,
           periodNumber: row.period_number,
           periodId: row.period_id,
-          periodName: row.period_name,
-          startTime: row.start_time,
-          endTime: row.end_time,
+          periodName: periodName,
+          startTime: startTime,
+          endTime: endTime,
+          periodType: 'regular',
           teacherId: row.teacher_id,
           teacherName: `${row.teacher_first_name || ''} ${row.teacher_last_name || ''}`.trim(),
           classSectionId: row.class_section_id,
@@ -113,7 +285,55 @@ export const getClassTimetable = async (req, res) => {
         };
       });
 
-      res.json({ success: true, data: timetableMap });
+      // Build day schedules with all periods (including breaks)
+      const daySchedules = {};
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      
+      dayNames.forEach((dayName, dayNum) => {
+        const templateId = dayTemplateMap[dayNum] || defaultTemplateId;
+        const allPeriods = templateAllPeriodsMap[templateId] || [];
+        
+        // Build complete schedule for this day with timetable entries merged
+        const schedule = allPeriods.map(period => {
+          const key = `${dayName}-${period.periodNumber}`;
+          const entry = timetableMap[key];
+          
+          if (period.periodType === 'break' || period.periodType === 'lunch') {
+            // Return break period as-is
+            return {
+              periodNumber: period.periodNumber,
+              periodName: period.name,
+              startTime: period.startTime,
+              endTime: period.endTime,
+              periodType: period.periodType,
+              durationMinutes: period.durationMinutes,
+              isBreak: true
+            };
+          } else if (entry) {
+            // Return timetable entry with class info
+            return { ...entry, isBreak: false };
+          } else {
+            // Return empty period slot
+            return {
+              periodNumber: period.periodNumber,
+              periodName: period.name,
+              startTime: period.startTime,
+              endTime: period.endTime,
+              periodType: 'regular',
+              isBreak: false,
+              isEmpty: true
+            };
+          }
+        });
+        
+        daySchedules[dayName] = schedule;
+      });
+
+      res.json({ 
+        success: true, 
+        data: timetableMap,
+        daySchedules: daySchedules
+      });
     } finally {
       await dbClient.end();
     }
@@ -381,10 +601,19 @@ export const getDailyTimetable = async (req, res) => {
     // Get day of week from date
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const dayOfWeek = dayNames[new Date(date).getDay()];
+    const dayNum = new Date(date).getDay();
 
     const dbClient = await getGroupDbClient(groupId);
 
     try {
+      // Get day-specific timings
+      const { dayTemplateMap, templatePeriodsMap, defaultTemplateId } = 
+        await getDayTimingsMap(dbClient, schoolId);
+      
+      // Get the template for this specific day
+      const templateId = dayTemplateMap[dayNum] || defaultTemplateId;
+      const dayPeriods = templatePeriodsMap[templateId] || {};
+
       // Build query based on filters
       let baseQuery = `
         SELECT te.*,
@@ -393,7 +622,7 @@ export const getDailyTimetable = async (req, res) => {
           cs.id as class_section_id,
           cg.name as grade_name, cg.display_name as grade_display_name,
           sec.name as section_name,
-          cp.name as period_name, cp.start_time, cp.end_time,
+          cp.name as period_name, cp.start_time as default_start_time, cp.end_time as default_end_time,
           -- Check for date-specific substitution
           ds.id as substitution_id,
           ds.substitute_teacher_id,
@@ -434,15 +663,27 @@ export const getDailyTimetable = async (req, res) => {
 
       const result = await dbClient.query(baseQuery, params);
 
-      // Format response
-      const entries = result.rows.map(row => ({
+      // Format response with day-specific timings
+      const entries = result.rows.map(row => {
+        // Get period timings from the day's template
+        let startTime = row.default_start_time;
+        let endTime = row.default_end_time;
+        let periodName = row.period_name;
+        
+        if (dayPeriods[row.period_number]) {
+          startTime = dayPeriods[row.period_number].startTime;
+          endTime = dayPeriods[row.period_number].endTime;
+          periodName = dayPeriods[row.period_number].name || row.period_name;
+        }
+        
+        return {
         id: row.id,
         dayOfWeek: row.day_of_week,
         periodNumber: row.period_number,
         periodId: row.period_id,
-        periodName: row.period_name,
-        startTime: row.start_time,
-        endTime: row.end_time,
+        periodName: periodName,
+        startTime: startTime,
+        endTime: endTime,
         // Original teacher
         originalTeacherId: row.teacher_id,
         originalTeacherName: `${row.teacher_first_name || ''} ${row.teacher_last_name || ''}`.trim(),
@@ -468,7 +709,8 @@ export const getDailyTimetable = async (req, res) => {
         subjectName: row.subject_name,
         subjectCode: row.subject_code,
         room: row.room
-      }));
+      };
+      });
 
       res.json({ 
         success: true, 

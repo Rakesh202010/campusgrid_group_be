@@ -183,6 +183,7 @@ export const studentLogin = async (req, res) => {
           rollNumber: student.roll_number,
           photoUrl: student.photo_url,
           className: student.class_name ? `${student.class_name} - ${student.section_name}` : null,
+          classSectionId: student.current_class_section_id,
           sessionName: student.session_name
         },
         school: {
@@ -270,7 +271,8 @@ export const parentLogin = async (req, res) => {
           // Get children for this parent
           const childrenResult = await dbClient.query(`
             SELECT s.id, s.first_name, s.last_name, s.admission_number, s.roll_number,
-                   s.photo_url, cg.display_name as class_name, sec.name as section_name
+                   s.photo_url, s.current_class_section_id, 
+                   cg.display_name as class_name, sec.name as section_name
             FROM students s
             JOIN student_parents sp ON s.id = sp.student_id
             LEFT JOIN class_sections cs ON s.current_class_section_id = cs.id
@@ -350,16 +352,17 @@ export const parentLogin = async (req, res) => {
         relationship: parent.parent_type || parent.relationship,
         photoUrl: parent.photo_url
       },
-      children: children.map(c => ({
-        id: c.id,
-        firstName: c.first_name,
-        lastName: c.last_name,
-        fullName: `${c.first_name} ${c.last_name || ''}`.trim(),
-        admissionNumber: c.admission_number,
-        rollNumber: c.roll_number,
-        photoUrl: c.photo_url,
-        className: c.class_name ? `${c.class_name} - ${c.section_name}` : null
-      })),
+    children: children.map(c => ({
+      id: c.id,
+      firstName: c.first_name,
+      lastName: c.last_name,
+      fullName: `${c.first_name} ${c.last_name || ''}`.trim(),
+      admissionNumber: c.admission_number,
+      rollNumber: c.roll_number,
+      photoUrl: c.photo_url,
+      className: c.class_name ? `${c.class_name} - ${c.section_name}` : null,
+      classSectionId: c.current_class_section_id
+    })),
       school: {
         id: parent.school_id,
         name: parent.school_name,
@@ -740,6 +743,7 @@ export const getCurrentUser = async (req, res) => {
               rollNumber: s.roll_number,
               photoUrl: s.photo_url,
               className: s.class_name ? `${s.class_name} - ${s.section_name}` : null,
+              classSectionId: s.current_class_section_id,
               sessionName: s.session_name
             };
           }
@@ -768,7 +772,8 @@ export const getCurrentUser = async (req, res) => {
             // Get children
             const childrenResult = await dbClient.query(`
               SELECT s.id, s.first_name, s.last_name, s.admission_number, s.roll_number,
-                     s.photo_url, cg.display_name as class_name, sec.name as section_name
+                     s.photo_url, s.current_class_section_id,
+                     cg.display_name as class_name, sec.name as section_name
               FROM students s
               JOIN student_parents sp ON s.id = sp.student_id
               LEFT JOIN class_sections cs ON s.current_class_section_id = cs.id
@@ -785,7 +790,8 @@ export const getCurrentUser = async (req, res) => {
               admissionNumber: c.admission_number,
               rollNumber: c.roll_number,
               photoUrl: c.photo_url,
-              className: c.class_name ? `${c.class_name} - ${c.section_name}` : null
+              className: c.class_name ? `${c.class_name} - ${c.section_name}` : null,
+              classSectionId: c.current_class_section_id
             }));
           }
           break;

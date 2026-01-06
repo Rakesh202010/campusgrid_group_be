@@ -25,6 +25,8 @@ import feeSettingsRoutes from './routes/feeSettings.js';
 import userAuthRoutes from './routes/userAuth.js';
 import subjectMastersRoutes from './routes/subjectMasters.js';
 import streamsRoutes from './routes/streams.js';
+import idCardsRoutes from './routes/idCards.js';
+import teacherLeavesRoutes from './routes/teacherLeaves.js';
 
 // No need for dotenv in Docker, env vars are set in docker-compose
 
@@ -69,6 +71,8 @@ app.use('/api/fee-settings', feeSettingsRoutes); // Fee settings & configuration
 app.use('/api/user-auth', userAuthRoutes); // Student, Parent, Teacher, Staff authentication
 app.use('/api/subject-masters', subjectMastersRoutes); // Subject categories and types master data
 app.use('/api/streams', streamsRoutes); // Streams/Courses master data
+app.use('/api/id-cards', idCardsRoutes); // ID card template and generation
+app.use('/api/teacher-leaves', teacherLeavesRoutes); // Teacher leave management
 
 // 404 Handler
 app.use((req, res) => {

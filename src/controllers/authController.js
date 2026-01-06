@@ -6,7 +6,7 @@ import prismaAdmin from '../lib/prisma.js';
 
 const { Client } = pg;
 
-const JWT_SECRET = process.env.JWT_SECRET || 'campusgrid_secret_key_change_in_production';
+const JWT_SECRET = process.env.JWT_SECRET || 'school_admin_secret_change_in_production';
 const JWT_EXPIRES_IN = '7d';
 
 /**
