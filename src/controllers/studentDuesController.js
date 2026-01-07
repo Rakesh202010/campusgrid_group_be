@@ -573,9 +573,11 @@ export const getStudentDues = async (req, res) => {
           summary: {
             totalOverdue,
             totalCurrent,
+            totalCurrentDue: totalCurrent, // Alias for frontend compatibility
             totalUpcoming,
             totalLateFees,
             totalPayable: totalOverdue + totalCurrent,
+            grandTotal: totalOverdue + totalCurrent, // Alias for frontend compatibility
             totalPaid
           },
           overdue,
