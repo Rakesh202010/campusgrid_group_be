@@ -27,6 +27,7 @@ import subjectMastersRoutes from './routes/subjectMasters.js';
 import streamsRoutes from './routes/streams.js';
 import idCardsRoutes from './routes/idCards.js';
 import teacherLeavesRoutes from './routes/teacherLeaves.js';
+import rosterRoutes from './routes/roster.js';
 
 // No need for dotenv in Docker, env vars are set in docker-compose
 
@@ -37,6 +38,14 @@ const PORT = process.env.PORT || 4001;
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Request logging middleware
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/roster')) {
+    console.log(`[ROSTER] ${req.method} ${req.path} - Auth: ${req.headers.authorization ? 'Yes' : 'No'}`);
+  }
+  next();
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -73,6 +82,7 @@ app.use('/api/subject-masters', subjectMastersRoutes); // Subject categories and
 app.use('/api/streams', streamsRoutes); // Streams/Courses master data
 app.use('/api/id-cards', idCardsRoutes); // ID card template and generation
 app.use('/api/teacher-leaves', teacherLeavesRoutes); // Teacher leave management
+  app.use('/api/roster', rosterRoutes); // Roster & Duties management
 
 // 404 Handler
 app.use((req, res) => {
