@@ -80,7 +80,7 @@ async function runMigration() {
         // ============================================
         await schoolPool.query(`
           DO $$ BEGIN
-            CREATE TYPE roster_status AS ENUM ('scheduled', 'active', 'completed', 'cancelled', 'pending_approval');
+            CREATE TYPE roster_status AS ENUM ('scheduled', 'active', 'completed', 'cancelled', 'pending_approval', 'pending_acceptance', 'declined');
           EXCEPTION
             WHEN duplicate_object THEN null;
           END $$;
@@ -246,6 +246,10 @@ async function runMigration() {
             approved_by UUID,
             approved_at TIMESTAMP,
             
+            -- Completion tracking
+            completed_at TIMESTAMP WITH TIME ZONE,
+            completed_by UUID,
+            
             -- Meta
             notes TEXT,
             priority INT DEFAULT 0,
@@ -257,7 +261,30 @@ async function runMigration() {
         `);
         
         // ============================================
-        // TABLE 7: ROSTER AUDIT LOG
+        // TABLE 7: ROSTER ASSIGNMENT DATES (Per-day tracking)
+        // ============================================
+        await schoolPool.query(`
+          CREATE TABLE IF NOT EXISTS roster_assignment_dates (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            roster_assignment_id UUID NOT NULL REFERENCES roster_assignments(id) ON DELETE CASCADE,
+            date DATE NOT NULL,
+            status VARCHAR(30) DEFAULT 'pending_acceptance',
+            accepted_at TIMESTAMP WITH TIME ZONE,
+            accepted_by UUID,
+            declined_at TIMESTAMP WITH TIME ZONE,
+            declined_by UUID,
+            decline_reason TEXT,
+            completed_at TIMESTAMP WITH TIME ZONE,
+            completed_by UUID,
+            notes TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            UNIQUE(roster_assignment_id, date)
+          )
+        `);
+        
+        // ============================================
+        // TABLE 8: ROSTER AUDIT LOG
         // ============================================
         await schoolPool.query(`
           CREATE TABLE IF NOT EXISTS roster_audit_logs (

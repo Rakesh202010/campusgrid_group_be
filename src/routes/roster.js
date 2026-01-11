@@ -68,6 +68,18 @@ router.post('/assignments', rosterController.createRosterAssignment);
 router.put('/assignments/:id', rosterController.updateRosterAssignment);
 router.delete('/assignments/:id', rosterController.deleteRosterAssignment);
 router.post('/assignments/:id/approve', rosterController.approveRosterAssignment);
+router.post('/assignments/:id/complete', rosterController.markAssignmentComplete);
+router.post('/assignments/:id/status', rosterController.updateAssignmentStatus);
+router.post('/assignments/:id/accept', rosterController.acceptAssignment);
+router.post('/assignments/:id/decline', rosterController.declineAssignment);
+
+// Per-day acceptance/decline
+router.get('/assignments/:id/dates', rosterController.getAssignmentDates);
+router.post('/assignments/:id/dates/:dateId/accept', rosterController.acceptAssignmentDate);
+router.post('/assignments/:id/dates/:dateId/decline', rosterController.declineAssignmentDate);
+router.post('/assignments/:id/dates/:dateId/complete', rosterController.completeAssignmentDate);
+router.post('/assignments/:id/accept-all', rosterController.acceptAllDates);
+router.post('/assignments/:id/decline-all', rosterController.declineAllDates);
 
 // ============================================
 // REPORTING & VIEWS
